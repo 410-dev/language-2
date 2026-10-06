@@ -5,6 +5,7 @@ use crate::ast::{BinOp, ExprKind as A, StmtKind as S};
 use crate::hir::{Expr as HExpr, ExprKind as H, Stmt as HStmt};
 use l2_runtime::ops::{ArithOp, CmpOp};
 use l2_runtime::Builtin;
+use std::collections::HashSet;
 
 fn st(kind: StmtKind, span: Span) -> HStmt {
     HStmt { kind, span }
@@ -501,7 +502,11 @@ impl<'a> Checker<'a> {
             });
             (t, v)
         };
+        let borrowing = val.as_ref().map(|v| borrows_locals(v, &self.cur_ref().borrowing_lambdas)).unwrap_or(false);
         let id = self.declare(name, dty, span, mods.immutable, mods.copied, true);
+        if borrowing {
+            self.cur().borrowing_lambdas.insert(id);
+        }
         vec![st(StmtKind::Let(id, val), span)]
     }
 
@@ -655,6 +660,15 @@ impl<'a> Checker<'a> {
             }
         };
         let v = self.consume(v);
+        if matches!(place, Place::Field(..) | Place::Global(_)) && borrows_locals(&v, &self.cur_ref().borrowing_lambdas) {
+            self.err(span, "a lambda that borrows local variables cannot be stored in a field; declare it with 'move' (spec 8.5)");
+        }
+        if let Place::Local(id) = &place {
+            let id = *id;
+            if borrows_locals(&v, &self.cur_ref().borrowing_lambdas) {
+                self.cur().borrowing_lambdas.insert(id);
+            }
+        }
         vec![st(StmtKind::Assign(place, v), span)]
     }
 
@@ -679,6 +693,9 @@ impl<'a> Checker<'a> {
                     return vec![st(StmtKind::Return(None), span)];
                 }
                 let x = self.coerce(x, &rt, e.span);
+                if borrows_locals(&x, &self.cur_ref().borrowing_lambdas) {
+                    self.err(e.span, "this lambda borrows local variables and cannot outlive their scope; declare it with 'move' (spec 8.5)");
+                }
                 let x = if matches!(rt, Type::Ref(..)) {
                     self.check_ref_return(&x, span);
                     x
@@ -914,6 +931,16 @@ impl<'a> Checker<'a> {
             _ => Lit::Int(1),
         };
         HExpr::new(H::Lit(lit), ty.clone(), span)
+    }
+}
+
+/// Whether an expression is (or holds) a lambda that borrows local variables.
+fn borrows_locals(e: &HExpr, set: &HashSet<LocalId>) -> bool {
+    match &e.kind {
+        H::Lambda(_, caps) => caps.iter().any(|c| matches!(c, CaptureSrc::Ref(_))),
+        H::Local(id) | H::Move(id) => set.contains(id),
+        H::Convert(x) | H::Unwrap(x) => borrows_locals(x, set),
+        _ => false,
     }
 }
 

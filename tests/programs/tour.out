@@ -1,0 +1,11 @@
+[tour] start
+circle with area 3.14
+rect with area 7.00
+min=3.142 max=7.000
+hello / hello, world
+red
+{"red": 11, "blue": 2}
+caught: integer overflow: Int8 +
+two entries
+done
+[tour] end

@@ -1,0 +1,24 @@
+finally before return
+1
+body0 fin0 fin1 body2 fin2 fin3 
+stack overflow caught
+rethrow finally
+second from first
+inner finally x=4
+25
+inner finally x=0
+outer caught zero
+-2
+3
+안녕하세요, 세계
+9
+안녕하세요
+9 chars
+18446744073709551615
+6148914691236517205
+1
+255
+32767
+integer overflow: Int16 -
+integer overflow: Int64 /
+0

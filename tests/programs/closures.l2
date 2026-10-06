@@ -1,0 +1,85 @@
+@using sdk 1
+using stdio as stdio
+
+public class Counter {
+    private Int64 count = 0
+
+    public function Function[(), Int64] incrementer() {
+        return move () -> {
+            this.count += 1
+            return this.count
+        }
+    }
+
+    public function Int64 get() {
+        return count
+    }
+}
+
+function Function[(Int64), Int64] compose(Function[(Int64), Int64] f, Function[(Int64), Int64] g) {
+    return move (Int64 x) -> g(f(x))
+}
+
+function Int64 applyTwice(Function[(Int64), Int64] f, Int64 x) {
+    return f(f(x))
+}
+
+function void each(&Int64[] items, Function[(Int64), void] action) {
+    for (it in items) {
+        action(it)
+    }
+}
+
+function void main() {
+    // nested captures and mutation through captured variables
+    Int64 total = 0
+    Int64[] nums = Int64.range(1, 6)
+    each(&nums, (Int64 n) -> {
+        total += n
+    })
+    stdio.println(total)
+
+    Int64 factor = 3
+    Function[(Int64), Int64] times = (Int64 x) -> x * factor
+    stdio.println(applyTwice(times, 2))
+
+    Function[(Int64), Int64] inc = (Int64 x) -> x + 1
+    Function[(Int64), Int64] both = compose(inc, move (Int64 x) -> x * 10)
+    stdio.println(both(4))
+
+    // closures that capture 'this'
+    Counter c = Counter()
+    Function[(), Int64] next = c.incrementer()
+    next()
+    next()
+    stdio.println(next())
+    stdio.println(c.get())
+
+    // lambda returning a lambda
+    Function[(Int64), Function[(Int64), Int64]] adder = (Int64 a) -> move (Int64 b) -> a + b
+    Function[(Int64), Int64] add5 = adder(5)
+    stdio.println(add5(10))
+
+    // move lambda keeps its own copy of a String
+    String greeting = "hi"
+    Function[(), String] greet = move () -> greeting + "!"
+    stdio.println(greet())
+
+    // lambdas stored in arrays
+    Function[(Int64), Int64][] ops = Function[(Int64), Int64].array()
+    ops.insert(0, (Int64 x) -> x + 1)
+    ops.insert(1, (Int64 x) -> x * x)
+    for (op in ops) {
+        stdio.println(op(7))
+    }
+
+    // capture inside loops: each closure sees the variable at call time
+    Int64 acc = 0
+    for (Int64 i = 0; i < 3; i += 1) {
+        Function[(), void] add = () -> {
+            acc += i
+        }
+        add()
+    }
+    stdio.println(acc)
+}

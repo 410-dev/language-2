@@ -1,0 +1,5 @@
+// error: @compiler may only be declared in the entry file
+using stdio as stdio
+using lib.badmod as b
+function void main() {
+}

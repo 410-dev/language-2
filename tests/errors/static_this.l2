@@ -1,0 +1,9 @@
+// error: cannot be used in a static context
+public class A {
+    private Int64 v = 1
+    public static function Int64 get() {
+        return v
+    }
+}
+function void main() {
+}

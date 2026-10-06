@@ -1,0 +1,119 @@
+@using sdk 1
+using stdio as stdio
+
+function Int64 finallyOverrides() {
+    try {
+        return 1
+    } finally {
+        stdio.println("finally before return")
+    }
+}
+
+function String loopWithFinally() {
+    String log = ""
+    for (Int i = 0; i < 5; i += 1) {
+        try {
+            if (i == 1) {
+                continue
+            }
+            if (i == 3) {
+                break
+            }
+            log += f"body{i} "
+        } finally {
+            log += f"fin{i} "
+        }
+    }
+    return log
+}
+
+function Int64 depth(Int64 n) {
+    return depth(n + 1) + 1
+}
+
+function void rethrow() {
+    try {
+        throw IllegalArgumentException("first")
+    } catch (IllegalArgumentException e) {
+        throw RuntimeException("second from " + e.getMessage())
+    } finally {
+        stdio.println("rethrow finally")
+    }
+}
+
+function Int64 nested(Int64 x) {
+    try {
+        try {
+            if (x == 0) {
+                throw ArithmeticException("zero")
+            }
+            return 100 / x
+        } catch (IllegalArgumentException e) {
+            return -1
+        } finally {
+            stdio.println(f"inner finally x={x}")
+        }
+    } catch (ArithmeticException e) {
+        stdio.println("outer caught " + e.getMessage())
+        return -2
+    }
+}
+
+function void main() {
+    stdio.println(finallyOverrides())
+    stdio.println(loopWithFinally())
+    try {
+        depth(0)
+    } catch (StackOverflowError e) {
+        stdio.println("stack overflow caught")
+    }
+    try {
+        rethrow()
+    } catch (RuntimeException e) {
+        stdio.println(e.getMessage())
+    }
+    stdio.println(nested(4))
+    stdio.println(nested(0))
+
+    // switch inside a loop: break leaves only the switch
+    Int count = 0
+    for (Int i = 0; i < 4; i += 1) {
+        switch (i as v) {
+            case v == 2:
+                break
+            default:
+                count += 1
+        }
+    }
+    stdio.println(count)
+
+    // unicode and escapes
+    String ko = "안녕하세요, 세계"
+    stdio.println(ko)
+    stdio.println(ko.length())
+    stdio.println(ko.substring(0, 5))
+    stdio.println(f"{ko.characters().length()} chars")
+
+    // unsigned and wide values
+    UInt64 big = UInt64.MAX
+    stdio.println(big)
+    stdio.println(big / 3)
+    stdio.println(big.addWrap(2))
+    UInt8 b = 200
+    stdio.println(b + 55)
+    Int16 s16 = -32768
+    stdio.println(s16.subWrap(1))
+    try {
+        Int16 x = s16 - 1
+        stdio.println(x)
+    } catch (ArithmeticException e) {
+        stdio.println(e.getMessage())
+    }
+    Int64 minv = Int64.MIN
+    try {
+        stdio.println(minv / -1)
+    } catch (ArithmeticException e) {
+        stdio.println(e.getMessage())
+    }
+    stdio.println(minv % -1)
+}

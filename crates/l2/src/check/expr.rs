@@ -1869,10 +1869,29 @@ impl<'a> Checker<'a> {
                         if !ms.is_empty() {
                             return self.invoke_methods(ms, None, args, span, true);
                         }
+                        if name == "array" {
+                            return self.array_new(Type::Iface(i), args, span);
+                        }
                     }
                 }
                 if is_builtin_type_name(n) {
                     return self.builtin_static_call(n, name, args, expected, span);
+                }
+            }
+        }
+        // `T[A, B].array(...)` for composite element types (Function[...], Box[Int64], ...)
+        if name == "array" {
+            if let A::Index(base, _) = &obj.kind {
+                if let A::Ident(bn) = &base.kind {
+                    let is_type = bn == "Function" || bn == "Dictionary" || self.class_decls.contains_key(bn) || self.iface_decls.contains_key(bn);
+                    if is_type && self.lookup_local(bn).is_none() {
+                        if let Some(te) = crate::parser::expr_to_type(obj) {
+                            let module = self.current_module();
+                            let subst = self.cur_ref().subst.clone();
+                            let t = self.resolve_type(&te, module, &subst);
+                            return self.array_new(t, args, span);
+                        }
+                    }
                 }
             }
         }

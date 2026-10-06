@@ -1,0 +1,34 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+using stdio as stdio
+
+function Int64 fib(Int64 n) {
+    if (n < 2) {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+function Int64 sieve(Int64 limit) {
+    Boolean[] composite = Boolean.array(length = limit + 1, length_immutable = true)
+    Int64 count = 0
+    for (Int64 i = 2; i <= limit; i += 1) {
+        if (not composite[i]) {
+            count += 1
+            for (Int64 j = i * i; j <= limit; j += i) {
+                composite[j] = true
+            }
+        }
+    }
+    return count
+}
+
+function void main() {
+    stdio.println(fib(27))
+    stdio.println(sieve(300000))
+    Int64 sum = 0
+    for (Int64 i = 0; i < 3000000; i += 1) {
+        sum += i % 7
+    }
+    stdio.println(sum)
+}

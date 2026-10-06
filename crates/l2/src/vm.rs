@@ -14,7 +14,6 @@ pub struct Vm<'p> {
     m: &'p Module,
     globals: Vec<Rc<RefCell<Value>>>,
     depth: usize,
-    ownership: bool,
 }
 
 impl<'p> Host for Vm<'p> {
@@ -63,7 +62,7 @@ pub fn run(p: &Program, args: Vec<String>) -> i32 {
 }
 
 pub fn run_module(p: &Program, m: &Module, args: Vec<String>) -> i32 {
-    let mut vm = Vm { p, m, globals: p.globals.iter().map(|_| Rc::new(RefCell::new(Value::Void))).collect(), depth: 0, ownership: p.config.memory == MemoryMode::Ownership };
+    let mut vm = Vm { p, m, globals: p.globals.iter().map(|_| Rc::new(RefCell::new(Value::Void))).collect(), depth: 0 };
     let code = match vm.call(p.init, vec![], None) {
         Err(e) => vm.uncaught(e),
         Ok(_) => {

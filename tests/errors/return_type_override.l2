@@ -1,0 +1,9 @@
+// error: overrides a method with a different return type
+public class A {
+    public function Int64 v() { return 1 }
+}
+public class B extends A {
+    public function String v() { return "x" }
+}
+function void main() {
+}

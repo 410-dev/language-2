@@ -1,0 +1,14 @@
+@using sdk 1
+using stdio as stdio
+using lib.ping as p
+
+function void main() {
+    stdio.println(p.ping(5))
+    stdio.println(Shared.calls)
+    using lib.pong as q
+    stdio.println(q.pong(2))
+    String name = stdio.read("name? ")
+    String age = stdio.read()
+    stdio.println("")
+    stdio.println(f"hello {name}, next year you are {age.parse(Int64) + 1}")
+}

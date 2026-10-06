@@ -1,0 +1,11 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+
+function void main(String[] args) {
+    stdio.println("Hello, language-2!")
+    for (i, a in args.kv()) {
+        stdio.println(f"arg[{i}] = {a}")
+    }
+}

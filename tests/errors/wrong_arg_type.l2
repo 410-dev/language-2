@@ -1,0 +1,5 @@
+// error: type mismatch: expected Int64, found String
+function void f(Int64 x) {}
+function void main() {
+    f("no")
+}

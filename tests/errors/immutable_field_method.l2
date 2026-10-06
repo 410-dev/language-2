@@ -1,0 +1,10 @@
+// error: field 'id' is Immutable
+public class A {
+    private Immutable Int64 id
+    public A() { this.id = 1 }
+    public function void change() {
+        this.id = 2
+    }
+}
+function void main() {
+}

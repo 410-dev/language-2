@@ -1,0 +1,4 @@
+@using sdk 1
+public class A {
+    protected String name = "a"
+}

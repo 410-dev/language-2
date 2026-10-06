@@ -1,0 +1,8 @@
+// error: 'secret' is private
+public class A {
+    private Int64 secret = 1
+}
+function void main() {
+    A a = A()
+    Int64 s = a.secret
+}

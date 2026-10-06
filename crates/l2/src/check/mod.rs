@@ -155,6 +155,8 @@ pub struct FnCtx {
     pub captures: Vec<(LocalId, LocalId, bool)>,
     pub is_move_lambda: bool,
     pub this_local: Option<LocalId>,
+    /// Locals holding lambdas that borrow variables of this function (they may not escape).
+    pub borrowing_lambdas: HashSet<LocalId>,
 }
 
 impl FnCtx {
@@ -180,6 +182,7 @@ impl FnCtx {
             captures: Vec::new(),
             is_move_lambda: false,
             this_local: None,
+            borrowing_lambdas: HashSet::new(),
         }
     }
 }

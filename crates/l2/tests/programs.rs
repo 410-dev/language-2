@@ -39,7 +39,17 @@ fn run_backend(backend: &str) {
             // invalid memory access is undefined behaviour in native code (spec 15.3)
             continue;
         }
-        let out = Command::new(bin()).args(["run", "--backend", backend]).arg(&p).env("L2_SEED", "7").output().unwrap();
+        let mut cmd = Command::new(bin());
+        cmd.args(["run", "--backend", backend]).arg(&p).env("L2_SEED", "7");
+        let input = std::fs::read(p.with_extension("in")).unwrap_or_default();
+        cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        {
+            use std::io::Write;
+            let mut stdin = child.stdin.take().unwrap();
+            let _ = stdin.write_all(&input);
+        }
+        let out = child.wait_with_output().unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
         let stderr = String::from_utf8_lossy(&out.stderr).replace("\r\n", "\n");
         let want = std::fs::read_to_string(p.with_extension("out")).unwrap().replace("\r\n", "\n");
@@ -77,7 +87,11 @@ fn native_compiler() {
 #[test]
 fn compile_errors() {
     let mut failures = Vec::new();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("errors")).unwrap().filter_map(|e| e.ok().map(|e| e.path())).collect();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root().join("errors"))
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|e| e == "l2").unwrap_or(false))
+        .collect();
     files.sort();
     for p in files {
         let src = std::fs::read_to_string(&p).unwrap();

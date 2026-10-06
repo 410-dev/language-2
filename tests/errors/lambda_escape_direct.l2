@@ -1,0 +1,7 @@
+// error: cannot outlive their scope
+function Function[(), Int64] make() {
+    Int64 x = 1
+    return () -> x + 1
+}
+function void main() {
+}

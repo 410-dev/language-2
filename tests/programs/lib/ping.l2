@@ -1,0 +1,13 @@
+@using sdk 1
+using lib.pong as pong
+
+public function Int64 ping(Int64 n) {
+    if (n <= 0) {
+        return 0
+    }
+    return pong.pong(n - 1) + 1
+}
+
+public class Shared {
+    public static Int64 calls = 0
+}

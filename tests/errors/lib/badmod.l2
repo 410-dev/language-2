@@ -1,0 +1,3 @@
+@using sdk 1
+@compiler(Target=[amd64])
+public function void helper() {}

@@ -1,0 +1,9 @@
+// error: 'name' is protected
+using lib.prot as prot
+public class B {
+    public function String peek(&A a) {
+        return a.name.clone()
+    }
+}
+function void main() {
+}

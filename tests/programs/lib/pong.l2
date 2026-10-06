@@ -1,0 +1,10 @@
+@using sdk 1
+using lib.ping as ping
+
+public function Int64 pong(Int64 n) {
+    Shared.calls += 1
+    if (n <= 0) {
+        return 0
+    }
+    return ping.ping(n - 1) + 10
+}
