@@ -38,6 +38,7 @@ pub enum Op {
     StoreDeref(u32, bool),
     TupleGet(u32),
     MakeTuple(u32),
+    MakeArray(u32),
     MakeDict(u32),
     Arith(ArithOp, bool),
     Neg(bool),
@@ -170,7 +171,7 @@ fn effect(op: &Op) -> (u32, u32) {
         Op::SetField(..) | Op::StoreRef(_) => (2, 0),
         Op::ElemRef => (2, 1),
         Op::GetField(_) | Op::FieldRef(_) | Op::Deref | Op::TupleGet(_) | Op::Neg(_) | Op::BitNot | Op::Not | Op::NonNull(_) | Op::Convert(_) | Op::Cast(..) => (1, 1),
-        Op::MakeTuple(n) | Op::Concat(n) | Op::Call(_, n) | Op::CallVirtual(_, n) | Op::New(_, _, n) | Op::Builtin(_, n) | Op::BuiltinMutLocal(_, _, n) | Op::MakeClosure(_, n) => (n, 1),
+        Op::MakeTuple(n) | Op::MakeArray(n) | Op::Concat(n) | Op::Call(_, n) | Op::CallVirtual(_, n) | Op::New(_, _, n) | Op::Builtin(_, n) | Op::BuiltinMutLocal(_, _, n) | Op::MakeClosure(_, n) => (n, 1),
         Op::MakeDict(n) => (2 * n, 1),
         Op::Arith(..) | Op::Cmp(_) => (2, 1),
         Op::CallClosure(n) | Op::BuiltinMutRef(_, n) => (n + 1, 1),
@@ -794,6 +795,10 @@ impl<'h> FnCompiler<'h> {
             ExprKind::Tuple(xs) => {
                 let n = self.args(xs);
                 self.emit(Op::MakeTuple(n));
+            }
+            ExprKind::ArrayLit(xs) => {
+                let n = self.args(xs);
+                self.emit(Op::MakeArray(n));
             }
             ExprKind::RefMut(p) => self.place_ref(p),
             ExprKind::Seq(stmts, x) => {

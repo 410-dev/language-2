@@ -1228,6 +1228,24 @@ impl Parser {
                 self.bump();
                 ExprKind::TypeLit(TypeExpr::Void)
             }
+            Tok::LBracket => {
+                self.bump();
+                let mut items = Vec::new();
+                loop {
+                    self.skip_newlines();
+                    if self.eat(&Tok::RBracket) {
+                        break;
+                    }
+                    items.push(self.expr()?);
+                    self.skip_newlines();
+                    if !self.eat(&Tok::Comma) {
+                        self.skip_newlines();
+                        self.expect(&Tok::RBracket)?;
+                        break;
+                    }
+                }
+                ExprKind::ArrayLit(items)
+            }
             _ => return Err(self.unexpected("an expression")),
         };
         Ok(Expr::new(k, span))

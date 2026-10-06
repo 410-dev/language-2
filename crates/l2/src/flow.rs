@@ -219,7 +219,7 @@ impl<'p> Flow<'p> {
                 s1.merge(&s2);
                 *st = s1;
             }
-            ExprKind::Concat(xs) | ExprKind::Call(_, xs) | ExprKind::CallVirtual(_, xs) | ExprKind::New(_, _, xs) | ExprKind::Builtin(_, xs) | ExprKind::Tuple(xs) => {
+            ExprKind::Concat(xs) | ExprKind::Call(_, xs) | ExprKind::CallVirtual(_, xs) | ExprKind::New(_, _, xs) | ExprKind::Builtin(_, xs) | ExprKind::Tuple(xs) | ExprKind::ArrayLit(xs) => {
                 for x in xs {
                     self.expr(x, st);
                 }

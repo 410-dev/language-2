@@ -122,6 +122,8 @@ pub enum ExprKind {
     Dict(Vec<(Expr, Expr)>),
     /// `(a, b, c)` or `return a, b, c` — multiple return values.
     Tuple(Vec<Expr>),
+    /// `[a, b, c]` (array literal; also JSON arrays inside Dictionary literals).
+    ArrayLit(Vec<Expr>),
     Lambda { params: Vec<Param>, ret: Option<TypeExpr>, body: LambdaBody, is_move: bool },
     /// A type used in expression position, e.g. the argument of `castTo(Int8)` when it is not a
     /// plain identifier (`castTo(Int64[])`, `castTo(String?)`).

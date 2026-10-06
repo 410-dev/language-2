@@ -39,7 +39,7 @@ pub fn walk_expr(e: &Expr, f: &mut dyn FnMut(&Expr)) {
             walk_expr(b, f);
             walk_expr(c, f);
         }
-        ExprKind::Concat(xs) | ExprKind::Call(_, xs) | ExprKind::CallVirtual(_, xs) | ExprKind::New(_, _, xs) | ExprKind::Builtin(_, xs) | ExprKind::Tuple(xs) => {
+        ExprKind::Concat(xs) | ExprKind::Call(_, xs) | ExprKind::CallVirtual(_, xs) | ExprKind::New(_, _, xs) | ExprKind::Builtin(_, xs) | ExprKind::Tuple(xs) | ExprKind::ArrayLit(xs) => {
             xs.iter().for_each(|x| walk_expr(x, f))
         }
         ExprKind::CallClosure(c, xs) => {

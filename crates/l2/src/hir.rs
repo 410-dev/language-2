@@ -261,6 +261,8 @@ pub enum ExprKind {
     FuncRef(FuncId),
     Dict(Vec<(Expr, Expr)>),
     Tuple(Vec<Expr>),
+    /// Array literal (a new length-mutable array).
+    ArrayLit(Vec<Expr>),
     /// `*x`: a mutable reference to a storage location.
     RefMut(Box<Place>),
     /// Run statements, then evaluate the expression (used by desugarings that need temporaries).

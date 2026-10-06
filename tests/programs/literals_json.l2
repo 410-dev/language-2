@@ -1,0 +1,53 @@
+@using sdk 1
+using stdio as stdio
+
+public class Profile {
+    private copied String name
+    public Profile(String name) { this.name = name }
+    public function String takeName() {
+        return this.name
+    }
+}
+
+function Int64 sum(Int64[] xs) {
+    Int64 s = 0
+    for (x in xs) {
+        s += x
+    }
+    return s
+}
+
+function void main() {
+    Int64[] nums = [3, 1, 2]
+    nums.sort()
+    stdio.println(nums)
+    stdio.println(sum([10, 20, 30]))
+    STVariable words = ["a", "b"]
+    words.insert(2, "c")
+    stdio.println(words)
+    Float64[] mixed = [1, 2.5, -3]
+    stdio.println(mixed)
+    String[][] grid = [["x", "o"], ["o", "x"]]
+    stdio.println(grid[1][0])
+    Int64? [] maybe = [1, null, 3]
+    stdio.println(maybe)
+
+    // JSON-compatible dictionary literal with arrays and nested objects
+    Dictionary config = {
+        "name": "demo",
+        "ports": [80, 443],
+        "debug": false,
+        "owner": null,
+        "limits": {"cpu": 2, "mem": [512, 1024]}
+    }
+    stdio.println(config)
+    Int32[] ports = config["ports"].clone().castTo(Int32[])
+    stdio.println(ports[1])
+
+    // copied fields are cloned when moved out
+    Profile p = Profile("ada")
+    String n1 = p.takeName()
+    String n2 = p.takeName()
+    n1.append("!")
+    stdio.println(n1 + " " + n2)
+}

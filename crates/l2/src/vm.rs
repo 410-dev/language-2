@@ -195,13 +195,18 @@ impl<'p> Vm<'p> {
     }
 
     pub fn call(&mut self, fid: u32, args: Vec<Value>, caps: Option<&[Value]>) -> Result<Value, Exc> {
+        self.invoke(fid, None, args.into_iter(), caps)
+    }
+
+    /// Calls a function, moving the arguments directly into the callee's locals.
+    fn invoke(&mut self, fid: u32, first: Option<Value>, args: impl Iterator<Item = Value>, caps: Option<&[Value]>) -> Result<Value, Exc> {
         if self.depth >= MAX_DEPTH {
             return Err(self.throw(ExcKind::StackOverflow, "stack depth limit exceeded".into()));
         }
         let m = self.m;
         let c = &m.chunks[fid as usize];
         let mut locals = vec![Value::Void; c.nlocals as usize];
-        for (pid, v) in c.params.iter().zip(args.into_iter()) {
+        for (pid, v) in c.params.iter().zip(first.into_iter().chain(args)) {
             locals[*pid as usize] = if c.cells[*pid as usize] { cell(v) } else { v };
         }
         if let Some(caps) = caps {
@@ -377,6 +382,10 @@ impl<'p> Vm<'p> {
                     let items = stack.split_off(stack.len() - n as usize);
                     stack.push(Value::Tuple(Rc::new(items)));
                 }
+                Op::MakeArray(n) => {
+                    let items = stack.split_off(stack.len() - n as usize);
+                    stack.push(Value::array(items, false));
+                }
                 Op::MakeDict(n) => {
                     let items = stack.split_off(stack.len() - 2 * n as usize);
                     let mut d = DictVal::default();
@@ -464,13 +473,14 @@ impl<'p> Vm<'p> {
                     stack.push(r);
                 }
                 Op::Call(f, n) => {
-                    let args = stack.split_off(stack.len() - n as usize);
-                    let r = tri!(self.call(f, args, None));
+                    let at = stack.len() - n as usize;
+                    let r = self.invoke(f, None, stack.drain(at..), None);
+                    let r = tri!(r);
                     stack.push(r);
                 }
                 Op::CallVirtual(sel, n) => {
-                    let args = stack.split_off(stack.len() - n as usize);
-                    let obj = tri!(self.object(&args[0]));
+                    let at = stack.len() - n as usize;
+                    let obj = tri!(self.object(&stack[at]));
                     let f = match self.p.classes[obj.class as usize].vtable.get(&sel) {
                         Some(f) => *f,
                         None => {
@@ -478,7 +488,8 @@ impl<'p> Vm<'p> {
                             tri!(Err(self.throw(ExcKind::UnsupportedOperation, format!("method {} not implemented", name))))
                         }
                     };
-                    let r = tri!(self.call(f, args, None));
+                    let r = self.invoke(f, None, stack.drain(at..), None);
+                    let r = tri!(r);
                     stack.push(r);
                 }
                 Op::CallClosure(n) => {
@@ -496,13 +507,12 @@ impl<'p> Vm<'p> {
                     stack.push(r);
                 }
                 Op::New(cl, ctor, n) => {
-                    let args = stack.split_off(stack.len() - n as usize);
+                    let at = stack.len() - n as usize;
                     let ci = &self.p.classes[cl as usize];
                     let fields: Vec<Value> = ci.fields.iter().map(|f| if f.ty.is_nullable() { Value::Null } else { Value::Void }).collect();
                     let obj = Value::Object(Rc::new(Object { class: cl, fields: RefCell::new(fields), freed: Cell::new(false) }));
-                    let mut a = vec![obj.clone()];
-                    a.extend(args);
-                    tri!(self.call(ctor, a, None));
+                    let r = self.invoke(ctor, Some(obj.clone()), stack.drain(at..), None);
+                    tri!(r);
                     stack.push(obj);
                 }
                 Op::Builtin(b, n) => {

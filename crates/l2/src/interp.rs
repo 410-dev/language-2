@@ -770,6 +770,7 @@ impl<'p> Interp<'p> {
                 Value::Dict(Rc::new(d))
             }
             ExprKind::Tuple(xs) => Value::Tuple(Rc::new(self.eval_args(fr, xs)?)),
+            ExprKind::ArrayLit(xs) => Value::array(self.eval_args(fr, xs)?, false),
             ExprKind::RefMut(p) => self.place_ref(fr, p)?,
             ExprKind::Seq(stmts, x) => {
                 for s in stmts {

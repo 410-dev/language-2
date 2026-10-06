@@ -14,6 +14,7 @@ pub struct Cand {
 pub fn is_literalish(e: &ast::Expr) -> bool {
     match &e.kind {
         A::Int(_) | A::Float(_) | A::Null | A::Dict(_) | A::Lambda { .. } => true,
+        A::ArrayLit(items) => items.is_empty() || items.iter().any(is_literalish),
         A::Unary(UnOp::Neg, inner) => matches!(inner.kind, A::Int(_) | A::Float(_)),
         A::Tuple(items) => items.iter().any(is_literalish),
         _ => false,
@@ -295,6 +296,12 @@ impl<'a> Checker<'a> {
                 let inner = self.consume(*inner);
                 HExpr::new(H::Convert(Box::new(inner)), ty, span)
             }
+            H::Field(obj, idx) if matches!(obj.ty.deref(), Type::Class(c) if self.cmeta[*c as usize].fields[idx as usize].copied) => {
+                // `copied` fields are cloned when used as a move source (spec 9.4)
+                let ty = e.ty.clone();
+                let read = HExpr::new(H::Field(obj, idx), ty.clone(), span);
+                HExpr::new(H::Builtin(Builtin::Clone, vec![read]), ty, span)
+            }
             H::Field(obj, idx) => {
                 let name = match &obj.ty {
                     Type::Class(c) => self.classes[*c as usize].fields[idx as usize].name.clone(),
@@ -526,6 +533,7 @@ impl<'a> Checker<'a> {
                 HExpr::new(H::Tuple(out), Type::Tuple(tys), span)
             }
             A::Lambda { params, ret, body, is_move } => self.lambda(params, ret.as_ref(), body, *is_move, expected, span),
+            A::ArrayLit(items) => self.array_literal(items, expected, span),
             A::TypeLit(_) => {
                 self.err(span, "a type is not a value here");
                 HExpr::new(H::Lit(Lit::Null), Type::Error, span)
@@ -1106,6 +1114,56 @@ impl<'a> Checker<'a> {
             out.push((kx, vx));
         }
         HExpr::new(H::Dict(out), Type::Dict(Box::new(kt), Box::new(vt)), span)
+    }
+
+    fn array_literal(&mut self, items: &'a [ast::Expr], expected: Option<&Type>, span: Span) -> HExpr {
+        let exp = match expected.map(|t| t.deref().non_null()) {
+            Some(Type::Array(e)) => Some(*e),
+            Some(Type::Dyn) => Some(Type::Dyn),
+            Some(Type::Union(us)) => match us.iter().find(|u| matches!(u, Type::Array(_))) {
+                Some(Type::Array(e)) => Some((**e).clone()),
+                _ => Some(Type::Dyn),
+            },
+            _ => None,
+        };
+        let et = match exp {
+            Some(t) => t,
+            None => {
+                if items.is_empty() {
+                    self.err(span, "cannot infer the element type of an empty array literal; declare the type");
+                    return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
+                }
+                // element type from the non-literal elements first, then unify
+                let mut t: Option<Type> = None;
+                for it in items.iter().filter(|i| !is_literalish(i)).chain(items.iter().filter(|i| is_literalish(i))) {
+                    let ty = match self.expr_probe_pub(it, t.as_ref()) {
+                        Some(x) => x,
+                        None => continue,
+                    };
+                    t = Some(match t {
+                        None => ty,
+                        Some(prev) => self.unify_branch(&prev, &ty, it.span),
+                    });
+                }
+                t.unwrap_or(Type::Error)
+            }
+        };
+        let mut out = Vec::new();
+        for it in items {
+            let x = self.expr(it, Some(&et));
+            let x = self.coerce(x, &et, it.span);
+            out.push(self.consume(x));
+        }
+        HExpr::new(H::ArrayLit(out), Type::Array(Box::new(et)), span)
+    }
+
+    /// Natural type of an expression for element-type inference (no HIR is kept).
+    pub fn expr_probe_pub(&mut self, e: &'a ast::Expr, hint: Option<&Type>) -> Option<Type> {
+        match &e.kind {
+            A::Int(_) | A::Unary(UnOp::Neg, _) if hint.map(|t| t.is_numeric()).unwrap_or(false) => hint.cloned(),
+            A::Null => Some(Type::Null),
+            _ => self.expr_probe(e),
+        }
     }
 
     fn index(&mut self, base: &'a ast::Expr, idx: &'a [ast::Expr], span: Span) -> HExpr {

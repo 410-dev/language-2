@@ -198,6 +198,7 @@ declare void @l2_set_field_int(ptr, i32, i8, i64)
 declare void @l2_set_field_f64(ptr, i32, i8, double)
 declare void @l2_set_field_bool(ptr, i32, i1 zeroext)
 declare ptr @l2_make_tuple(ptr, i32)
+declare ptr @l2_make_array(ptr, i32)
 declare ptr @l2_tuple_get(ptr, i32)
 declare ptr @l2_make_dict(ptr, i32)
 declare ptr @l2_closure_new(ptr, ptr, i32)
@@ -1687,6 +1688,14 @@ impl<'m, 'p, 'h> FnGen<'m, 'p, 'h> {
             ExprKind::Tuple(xs) => {
                 let (arr, boxes) = self.box_array(xs);
                 let t = self.call_val(Repr::Ptr, "l2_make_tuple", &[format!("ptr {}", arr), format!("i32 {}", boxes.len())]);
+                for b in &boxes {
+                    self.release(b);
+                }
+                V::new(Repr::Ptr, t, true)
+            }
+            ExprKind::ArrayLit(xs) => {
+                let (arr, boxes) = self.box_array(xs);
+                let t = self.call_val(Repr::Ptr, "l2_make_array", &[format!("ptr {}", arr), format!("i32 {}", boxes.len())]);
                 for b in &boxes {
                     self.release(b);
                 }

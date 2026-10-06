@@ -78,6 +78,7 @@ pub struct FieldMeta {
     pub immutable: bool,
     pub owner: ClassId,
     pub has_setter: bool,
+    pub copied: bool,
     pub span: Span,
 }
 
@@ -1072,8 +1073,9 @@ impl<'a> Checker<'a> {
             if fields.iter().any(|x: &FieldInfo| x.name == f.name) {
                 self.err(f.span, format!("duplicate field '{}' (fields cannot be redeclared in subclasses)", f.name));
             }
+            let field_copied = f.mods.copied && !ty.is_copy();
             fields.push(FieldInfo { name: f.name.clone(), ty, immutable: f.mods.immutable });
-            fmeta.push(FieldMeta { access: f.mods.access, immutable: f.mods.immutable, owner: id, has_setter: f.mods.setter.is_some(), span: f.span });
+            fmeta.push(FieldMeta { access: f.mods.access, immutable: f.mods.immutable, owner: id, has_setter: f.mods.setter.is_some(), copied: field_copied, span: f.span });
         }
         self.classes[id as usize].fields = fields.clone();
         self.cmeta[id as usize].fields = fmeta;

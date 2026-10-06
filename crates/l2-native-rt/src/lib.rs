@@ -576,6 +576,11 @@ pub unsafe extern "C" fn l2_make_tuple(items: *const BoxPtr, n: i32) -> BoxPtr {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn l2_make_array(items: *const BoxPtr, n: i32) -> BoxPtr {
+    bx(Value::array(vals(items, n), false))
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn l2_tuple_get(t: BoxPtr, i: i32) -> BoxPtr {
     match val(t).deref() {
         Value::Tuple(items) => bx(items[i as usize].clone()),
