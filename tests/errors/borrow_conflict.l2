@@ -1,4 +1,4 @@
-// error: while it is borrowed by
+// error: while it is borrowed by 'n'
 public class P {
     private getter String name
     public P(String n) { this.name = n }

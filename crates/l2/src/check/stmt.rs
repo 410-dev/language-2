@@ -771,7 +771,9 @@ impl<'a> Checker<'a> {
         let it = self.expr(src, None);
         let ity = it.ty.deref().clone();
         let owned_temp = !matches!(it.kind, H::Local(_) | H::Field(..) | H::Global(_) | H::Deref(_) | H::Unwrap(_));
-        let itl = self.add_local("$it", ity.clone(), span, true, false);
+        // iterating a variable borrows it for the duration of the loop
+        let it_decl = if matches!(it.kind, H::Local(_)) && !ity.is_copy() { Type::Ref(false, Box::new(ity.clone())) } else { ity.clone() };
+        let itl = self.add_local("$it", it_decl, span, true, false);
         if owned_temp && !ity.is_copy() {
             self.cur().scopes.last_mut().unwrap().owned.push(itl);
         }

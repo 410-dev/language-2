@@ -1,0 +1,7 @@
+// error: cannot move 'p' because it is borrowed
+public class P {}
+function void both(&P a, P b) {}
+function void main() {
+    P p = P()
+    both(p, p)
+}

@@ -559,6 +559,15 @@ fn borrow_check(p: &Program, f: &Func, stmts: &[Stmt], errors: &mut Vec<Diag>) {
                 _ => return,
             };
             for (ai, a) in args.iter().enumerate() {
+                // a value moved by one argument while another argument borrows it
+                if let ExprKind::Move(x) = &a.kind {
+                    for (bi, b) in args.iter().enumerate() {
+                        if ai != bi && matches!(b.kind, ExprKind::Local(l) if l == *x) {
+                            let n = f.locals[*x as usize].name.clone();
+                            errors.push(Diag::error(a.span, format!("cannot move '{}' because it is borrowed by another argument of the same call", n)));
+                        }
+                    }
+                }
                 if let ExprKind::RefMut(pl) = &a.kind {
                     if let Place::Local(x) = &**pl {
                         for (bi, b) in args.iter().enumerate() {
@@ -583,7 +592,8 @@ fn borrow_check(p: &Program, f: &Func, stmts: &[Stmt], errors: &mut Vec<Diag>) {
                     if let Some(last) = last {
                         if let Some((span, what)) = conflicts(&rest[..=last], root, *m) {
                             let (rn, bn) = (f.locals[root as usize].name.clone(), f.locals[*r as usize].name.clone());
-                            errors.push(Diag::error(span, format!("cannot {} '{}' while it is borrowed by '{}'", what, rn, bn)));
+                            let by = if bn.starts_with('$') { "the enclosing for-each loop".to_string() } else { format!("'{}'", bn) };
+                            errors.push(Diag::error(span, format!("cannot {} '{}' while it is borrowed by {}", what, rn, by)));
                         }
                     }
                 }
