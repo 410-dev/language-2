@@ -1,0 +1,4 @@
+// error: cannot find 'nope' in this scope
+function void main() {
+    Int x = nope
+}

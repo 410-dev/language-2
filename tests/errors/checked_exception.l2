@@ -1,0 +1,7 @@
+// error: unreported exception IOException
+function void read() throws IOException {
+    throw IOException("x")
+}
+function void main() {
+    read()
+}

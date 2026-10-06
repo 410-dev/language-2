@@ -1,0 +1,7 @@
+// error: does not override anything
+public class A {
+    @Override
+    public function void nothing() {}
+}
+function void main() {
+}

@@ -1,0 +1,21 @@
+@using sdk 1
+@runtimecfg(
+    IntegerOverflow=wrap
+)
+
+// This module wraps on overflow; callers keep their own policy (spec 2.6).
+public function Int8 inc(Int8 v) {
+    return v + 1
+}
+
+public function UInt8 toUnsigned(Int8 v) {
+    return v.castTo(UInt8)
+}
+
+public class Counter {
+    private getter Int8 value = 0
+
+    public function void bump() {
+        value += 100
+    }
+}

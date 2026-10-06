@@ -1,0 +1,73 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+
+function void main(String[] args) {
+    // precedence (spec 6.8)
+    stdio.println(1 + 2 * 3)
+    stdio.println((1 + 2) * 3)
+    stdio.println(-2 ** 2)
+    stdio.println(2 ** 3 ** 2)
+    stdio.println(2.0 ** -1)
+    stdio.println(5 / 2)
+    stdio.println(-7 / 2)
+    stdio.println(-7 % 3)
+    stdio.println(7 % -3)
+    stdio.println(5.0 / 2)
+    Int x = 6
+    stdio.println(x && 3 == 2)
+    stdio.println(x || 1 ^ 2)
+    stdio.println(1 << 4 >> 2)
+    stdio.println(~5)
+    stdio.println(-16 >> 2)
+    UInt32 u = 4294967295
+    stdio.println(u >> 4)
+    Boolean b = true and not false or false
+    stdio.println(b)
+    stdio.println(not 1 == 2)
+    stdio.println(!(1 < 2))
+    // literals
+    stdio.println(0x1F + 0b101)
+    stdio.println(1_000_000)
+    stdio.println(3.14)
+    stdio.println(1.0)
+    stdio.println(1e10)
+    stdio.println(0.0001)
+    stdio.println(123456789.0)
+    stdio.println(null)
+    stdio.println(Null)
+    // strings
+    String name = "World"
+    stdio.println(f"Hello, {name}! {1 + 2} {{literal}}")
+    stdio.println("a" + 1 + 2)
+    stdio.println(1 + 2 + "a")
+    stdio.println("tab\tnew\n \"q\" \u{48}")
+    // semicolons and continuation
+    Int a = 1; Int c = 2
+    Int d = a +
+        c *
+        3
+    stdio.println(d)
+    stdio.println(add(
+        1,
+        2
+    ))
+    // ternary
+    Int t = a == 1 ? 10 : 20
+    stdio.println(t)
+    stdio.println(a > 5 ? "big" : a > 0 ? "small" : "neg")
+    // compound assignment
+    Int64 acc = 1
+    acc += 4
+    acc *= 3
+    acc -= 1
+    acc /= 2
+    acc %= 4
+    acc **= 3
+    stdio.println(acc)
+}
+
+function Int add(Int a, Int b) {
+    return a + b
+}

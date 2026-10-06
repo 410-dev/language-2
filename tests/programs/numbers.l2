@@ -1,0 +1,103 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+@compiler(
+    Target=[i386, amd64, arm64]
+    EnableSoftwareEmulation=true
+)
+@runtimecfg(
+    IntegerOverflow=error
+)
+using stdio as stdio
+
+function void main() {
+    stdio.println(Int8.MAX)
+    stdio.println(Int8.MIN)
+    stdio.println(UInt8.MAX)
+    stdio.println(Int64.MAX)
+    stdio.println(UInt64.MAX)
+    stdio.println(UInt64.MIN)
+
+    Int8 small = 100
+    try {
+        Int8 r = small + small
+        stdio.println(r)
+    } catch (ArithmeticException e) {
+        stdio.println("Int8 overflow")
+    }
+    stdio.println(small.addWrap(small))
+    stdio.println(small.mulWrap(3))
+    Int8 m = Int8.MIN
+    stdio.println(m.subWrap(1))
+
+    Int64 big = 300
+    try {
+        Int8 narrowed = big.castTo(Int8)
+        stdio.println(narrowed)
+    } catch (ArithmeticException e) {
+        stdio.println("narrowing overflow")
+    }
+    Int64 fits = 100
+    stdio.println(fits.castTo(Int8))
+    Float64 pi = 3.99
+    stdio.println(pi.castTo(Int32))
+    stdio.println((-pi).castTo(Int64))
+    Int32 i32 = 7
+    Int64 widened = i32
+    Float64 asFloat = i32
+    stdio.println(widened + asFloat)
+
+    // unsigned shifts are logical, signed shifts arithmetic
+    Int8 neg = -128
+    stdio.println(neg >> 1)
+    UInt8 un = 128
+    stdio.println(un >> 1)
+
+    // IntLarge
+    IntLarge f = 1
+    for (Int i = 1; i <= 30; i += 1) {
+        f *= i
+    }
+    stdio.println(f)
+    IntLarge huge = 2
+    stdio.println(huge ** 100)
+    stdio.println(f / 1000000007)
+    stdio.println(f % 1000000007)
+
+    // floats
+    Float32 third = 1.0
+    third /= 3
+    stdio.println(third)
+    Float64 third64 = 1.0 / 3
+    stdio.println(third64)
+    Float16 h = 0.1
+    stdio.println(h)
+    Float16 h2 = h + h
+    stdio.println(h2)
+    stdio.println(Float32.MAX)
+    stdio.println(0.1 + 0.2)
+    stdio.println(1.0 / 0.0)
+    stdio.println(-1.0 / 0.0)
+    stdio.println(10.0 % 3.0)
+
+    // formatting
+    Float64 x = 3.14159
+    stdio.println(x.format(-1, 3))
+    stdio.println(x.format(4, 2))
+    Int64 n = 42
+    stdio.println(n.format(5, -1))
+    stdio.println(n.format(-1, 2))
+    stdio.println(n.string() + "!")
+    stdio.println("123".parse(Int64) + 1)
+    stdio.println("2.5".parse(Float64) * 2)
+    stdio.println(Int.max(3, 9, 4))
+    stdio.println(Int.min(3, 2.5, 4))
+
+    // comparisons across widths
+    Int8 a8 = 5
+    Int64 b64 = 5
+    stdio.println(a8 == b64)
+    stdio.println(a8 < 6)
+    UInt32 u32 = 5
+    stdio.println(u32 == a8)
+    stdio.println(5 == 5.0)
+}

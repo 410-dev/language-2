@@ -1,0 +1,8 @@
+// error: must implement method 'area'
+public interface Shape {
+    public function Float64 area()
+}
+public class Sq implements Shape {
+}
+function void main() {
+}

@@ -1160,7 +1160,8 @@ impl<'a> Checker<'a> {
             if let (Some(sel), Some(f)) = (m.selector, m.func) {
                 let inherited = vtable.contains_key(&sel);
                 let from_iface = ifaces.iter().any(|i| self.imeta[*i as usize].methods.iter().any(|im| im.selector == Some(sel)));
-                if m.overrides && !inherited && !from_iface {
+                let implicit_root = (m.name == "equals" && m.params.len() == 1) || (m.name == "toString" && m.params.is_empty());
+                if m.overrides && !inherited && !from_iface && !implicit_root {
                     self.err(m.span, format!("method '{}' is marked @Override but does not override anything", m.name));
                 }
                 if inherited {

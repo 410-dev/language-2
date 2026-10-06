@@ -372,16 +372,48 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// `free(x)` (manual mode): calls `drop()` and recursively frees owned data.
     fn free(&mut self, v: Value) -> R<()> {
         if let Value::Object(o) = &v {
             if o.freed.get() {
-                return Err(self.throw(ExcKind::UseAfterFree, "double free".into()));
-            }
-            if let Some(df) = self.p.classes[o.class as usize].drop_fn {
-                self.call(df, vec![v.clone()])?;
+                return Err(self.throw(ExcKind::UseAfterFree, "double free of an object".into()));
             }
         }
-        builtins::free_value(&v);
+        self.free_rec(v)
+    }
+
+    fn free_rec(&mut self, v: Value) -> R<()> {
+        match &v {
+            Value::Object(o) => {
+                if o.freed.get() {
+                    return Ok(());
+                }
+                if let Some(df) = self.p.classes[o.class as usize].drop_fn {
+                    self.call(df, vec![v.clone()])?;
+                }
+                o.freed.set(true);
+                let fields: Vec<Value> = o.fields.borrow().clone();
+                for f in fields.into_iter().rev() {
+                    self.free_rec(f)?;
+                }
+            }
+            Value::Array(a) => {
+                for it in a.items.iter() {
+                    self.free_rec(it.clone())?;
+                }
+            }
+            Value::Dict(d) => {
+                for (_, it) in d.entries.iter() {
+                    self.free_rec(it.clone())?;
+                }
+            }
+            Value::Tuple(t) => {
+                for it in t.iter() {
+                    self.free_rec(it.clone())?;
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 

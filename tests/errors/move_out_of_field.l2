@@ -1,0 +1,8 @@
+// error: cannot move out of field
+public class P {
+    public String name = "x"
+}
+function void main() {
+    P p = P()
+    String s = p.name
+}

@@ -1,0 +1,6 @@
+// error: references cannot be stored in fields
+public class Holder {
+    private &String ref
+}
+function void main() {
+}

@@ -1,0 +1,6 @@
+// error: unsigned type UInt8 cannot be used as an index
+function void main() {
+    Int64[] a = Int64.array(length = 3, length_immutable = true)
+    UInt8 i = 1
+    Int64 v = a[i]
+}

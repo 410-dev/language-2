@@ -1,0 +1,4 @@
+// error: type mismatch: expected String, found Null
+function void main() {
+    String s = null
+}

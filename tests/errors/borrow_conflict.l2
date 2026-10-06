@@ -1,0 +1,12 @@
+// error: while it is borrowed by
+public class P {
+    private getter String name
+    public P(String n) { this.name = n }
+}
+function void consume(P p) {}
+function void main() {
+    P p = P("a")
+    &String n = p.name()
+    consume(p)
+    String x = n.clone()
+}

@@ -1,0 +1,4 @@
+// error: the '>>>' operator does not exist
+function void main() {
+    Int x = 8 >>> 1
+}

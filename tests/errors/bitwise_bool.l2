@@ -1,0 +1,4 @@
+// error: cannot take Boolean operands
+function void main() {
+    Boolean x = true && false
+}

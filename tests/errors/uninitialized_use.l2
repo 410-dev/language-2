@@ -1,0 +1,6 @@
+// error: used before it is definitely assigned
+using stdio as stdio
+function void main() {
+    Int64 x
+    stdio.println(x)
+}

@@ -1,0 +1,6 @@
+// error: free() is only available with MemoryManagement=manual
+public class N {}
+function void main() {
+    N n = N()
+    free(n)
+}

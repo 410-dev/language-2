@@ -1,0 +1,23 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+@runtimecfg(IntegerOverflow=error)
+
+using stdio as stdio
+using lib.wrapmath as wm
+
+function void main() {
+    stdio.println(wm.inc(127))
+    stdio.println(wm.toUnsigned(-1))
+    Int8 neg = -128
+    stdio.println(wm.toUnsigned(neg) >> 1)
+    Counter c = Counter()
+    c.bump()
+    c.bump()
+    stdio.println(c.value())
+    try {
+        Int8 x = 127
+        x += 1
+    } catch (ArithmeticException e) {
+        stdio.println("caller still uses the error policy")
+    }
+}

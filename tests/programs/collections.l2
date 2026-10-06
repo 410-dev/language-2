@@ -1,0 +1,93 @@
+@using sdk 1
+using stdio as stdio
+
+function void main() {
+    Int64[] arr = Int64.array()
+    arr.insert(0, 5)
+    arr.insert(1, 3)
+    arr.insert(2, 9)
+    arr.insert(0, 1)
+    stdio.println(arr)
+    stdio.println(arr.length())
+    stdio.println(arr[0])
+    stdio.println(arr[-1])
+    stdio.println(arr.at(-2))
+    stdio.println(arr.first())
+    stdio.println(arr.last())
+    stdio.println(arr.first(1))
+    stdio.println(arr.last(1))
+    arr[1] = 50
+    arr[-1] += 100
+    stdio.println(arr)
+    arr.sort()
+    stdio.println(arr)
+    arr.reverse()
+    stdio.println(arr)
+    Int64 removed = arr.remove(1)
+    stdio.println(f"removed {removed}, now {arr}")
+    stdio.println(arr.contains(3))
+    stdio.println(arr.isEmpty())
+
+    Int64[] copy = arr.clone()
+    copy[0] = -1
+    stdio.println(f"{arr} {copy}")
+    stdio.println(arr == copy)
+    copy[0] = arr[0]
+    stdio.println(arr == copy)
+
+    Int64[] fixed = Int64.array(length = 3, length_immutable = true)
+    fixed.fill(7)
+    stdio.println(fixed)
+    try {
+        fixed.insert(0, 1)
+    } catch (UnsupportedOperationException e) {
+        stdio.println("fixed length: " + e.getMessage())
+    }
+
+    String[] names = "carol,alice,bob".split(",")
+    names.sort()
+    stdio.println(names)
+    for (i, n in names.kv()) {
+        stdio.println(f"{i}={n}")
+    }
+
+    Immutable Int64[] frozen = Int64.array(length = 2, length_immutable = true)
+    stdio.println(frozen.length())
+
+    // dictionaries
+    Dictionary[String, Int64] ages = {"alice": 30, "bob": 25}
+    ages["carol"] = 41
+    ages["bob"] += 1
+    stdio.println(ages)
+    stdio.println(ages["alice"])
+    stdio.println(ages.length())
+    stdio.println(ages.containsKey("dave"))
+    for (k, v in ages.kv()) {
+        stdio.println(f"{k} -> {v}")
+    }
+    for (k in ages) {
+        stdio.print(k + ";")
+    }
+    stdio.println("")
+    Dictionary[String, Int64] more = {"dave": 19, "alice": 31}
+    ages.merge(more)
+    stdio.println(ages)
+    Int64 bobAge = ages.remove("bob")
+    stdio.println(f"{bobAge} {ages.keys()} {ages.values()}")
+
+    Dictionary loose = {"a": 1, "b": "text", "c": {"d": true}}
+    stdio.println(loose)
+    Int32 one = loose["a"].castTo(Int32)
+    stdio.println(one + 1)
+    Dictionary[String, String|Int64|Dictionary[String, DTVariable]] typed = {
+        "a": "b",
+        "n": 1,
+        "d": {"x": "y"}
+    }
+    stdio.println(typed)
+    try {
+        stdio.println(ages["nobody"])
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+}

@@ -1,0 +1,2 @@
+// error: entry file has no 'main' function
+function void helper() {}

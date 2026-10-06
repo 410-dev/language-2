@@ -1,0 +1,5 @@
+// error: cannot call 'length' on nullable type String?
+function void main() {
+    String? s = null
+    Int64 n = s.length()
+}

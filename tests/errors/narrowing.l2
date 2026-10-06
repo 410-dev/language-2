@@ -1,0 +1,5 @@
+// error: use .castTo() for narrowing
+function void main() {
+    Int64 big = 300
+    Int8 small = big
+}

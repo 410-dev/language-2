@@ -615,8 +615,8 @@ impl<'a> Checker<'a> {
                     };
                     let val = self.coerce(val, &vt, value.span);
                     let val = self.consume(val);
-                    let kmove = if kt.is_copy() { kread } else { HExpr::new(H::Move(tk), (*kt).clone(), span) };
-                    pre.push(st(StmtKind::Expr(HExpr::new(H::BuiltinMut(Builtin::DictSet, Box::new(place), vec![kmove, val]), Type::Void, span)), span));
+                    // the key temporary is never dropped, so it can be handed over without a move
+                    pre.push(st(StmtKind::Expr(HExpr::new(H::BuiltinMut(Builtin::DictSet, Box::new(place), vec![kread, val]), Type::Void, span)), span));
                     pre
                 }
                 Type::Error => Vec::new(),

@@ -1,0 +1,5 @@
+// error: cannot call mutating method 'append'
+function void main() {
+    Immutable String id = "x"
+    id.append("y")
+}

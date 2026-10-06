@@ -1,0 +1,8 @@
+// error: missing return statement
+function Int64 f(Int64 x) {
+    if (x > 0) {
+        return 1
+    }
+}
+function void main() {
+}

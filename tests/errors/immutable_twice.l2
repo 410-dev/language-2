@@ -1,0 +1,10 @@
+// error: may be assigned more than once
+public class P {
+    private Immutable Int64 v
+    public P() {
+        this.v = 1
+        this.v = 2
+    }
+}
+function void main() {
+}

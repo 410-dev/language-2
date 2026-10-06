@@ -1,0 +1,8 @@
+// error: drop() is called automatically
+public class R implements Droppable {
+    public function void drop() {}
+}
+function void main() {
+    R r = R()
+    r.drop()
+}

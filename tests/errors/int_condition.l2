@@ -1,0 +1,5 @@
+// error: condition must be Boolean, found Int32
+function void main() {
+    if (0) {
+    }
+}

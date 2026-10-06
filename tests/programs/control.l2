@@ -1,0 +1,108 @@
+@using sdk 1
+using stdio as stdio
+
+function String classify(Int n) {
+    if (n < 0) {
+        return "negative"
+    } else if (n == 0) {
+        return "zero"
+    } else {
+        return "positive"
+    }
+}
+
+function void main() {
+    stdio.println(classify(-5) + " " + classify(0) + " " + classify(7))
+
+    // C-style for with break / continue
+    Int sum = 0
+    for (Int i = 0; i < 10; i += 1) {
+        if (i == 7) {
+            break
+        }
+        if (i % 2 == 0) {
+            continue
+        }
+        sum += i
+    }
+    stdio.println(sum)
+
+    // while-style and infinite loops
+    Int n = 0
+    for (; n < 5;) {
+        n += 1
+    }
+    stdio.println(n)
+    Int k = 0
+    for (;;) {
+        k += 3
+        if (k > 10) {
+            break
+        }
+    }
+    stdio.println(k)
+
+    // for-each and kv
+    Int64[] arr = Int64.array(length = 4, length_immutable = true)
+    arr.fill(10, 20)
+    for (v in arr) {
+        stdio.print(v)
+        stdio.print(" ")
+    }
+    stdio.println("")
+    for (i, v in arr.kv()) {
+        stdio.println(f"{i}: {v}")
+    }
+
+    // ranges
+    for (i in Int.range(0, 10, 3)) {
+        stdio.print(i)
+    }
+    stdio.println("")
+    for (i in Int64.range(5, 0, -2)) {
+        stdio.print(i)
+    }
+    stdio.println("")
+    for (i in Int.range(0, 3)) {
+        stdio.print(i)
+    }
+    stdio.println("")
+
+    // switch with fallthrough
+    for (Int i = 0; i < 4; i += 1) {
+        switch (i as v) {
+            case v == 0:
+                stdio.println("zero")
+            case v == 1:
+                stdio.println("one")
+                fallthrough
+            case v == 2:
+                stdio.println("one-or-two")
+            default:
+                stdio.println("other")
+        }
+    }
+    String word = "hello"
+    switch (word as w) {
+        case w.startsWith("he"):
+            stdio.println("starts with he")
+            break
+        case w.length() == 5:
+            stdio.println("five letters")
+    }
+
+    // nested loops with labels-free break
+    Int found = -1
+    for (Int i = 0; i < 5; i += 1) {
+        for (Int j = 0; j < 5; j += 1) {
+            if (i * j == 6) {
+                found = i * 10 + j
+                break
+            }
+        }
+        if (found >= 0) {
+            break
+        }
+    }
+    stdio.println(found)
+}

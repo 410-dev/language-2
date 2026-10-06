@@ -1,0 +1,6 @@
+// error: condition must be Boolean
+function void main() {
+    Boolean? b = null
+    if (b) {
+    }
+}

@@ -1,0 +1,7 @@
+// error: cyclic static initialization
+public class S {
+    public static Int64 a = S.b + 1
+    public static Int64 b = S.a + 1
+}
+function void main() {
+}

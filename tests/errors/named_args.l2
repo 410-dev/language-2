@@ -1,0 +1,7 @@
+// error: must exactly match its parameter names
+function Int add(Int a, Int b) {
+    return a + b
+}
+function void main() {
+    Int x = add(b = 1, a = 2)
+}

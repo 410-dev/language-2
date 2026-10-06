@@ -1,0 +1,90 @@
+@using sdk 1
+using stdio as stdio
+
+function T identity[T](T x) {
+    return x
+}
+
+function T maxOf[T extends Comparable](T a, T b) {
+    return a > b ? a : b
+}
+
+function Int64 countAll(?[] items) {
+    return items.length()
+}
+
+public class Box[T] {
+    private getter T value
+
+    public Box(T value) {
+        this.value = value
+    }
+
+    public function Box[T] with(T v) {
+        return Box[T](v)
+    }
+}
+
+public class Pair[A, B] {
+    public A first
+    public B second
+
+    public Pair(A first, B second) {
+        this.first = first
+        this.second = second
+    }
+
+    public function String show() {
+        return f"({first}, {second})"
+    }
+}
+
+public interface Shape {
+    public function Float64 area()
+}
+
+public class Square implements Shape {
+    private Float64 side
+    public Square(Float64 side) { this.side = side }
+    public function Float64 area() { return side * side }
+}
+
+function Float64 totalArea[T extends Shape](T[] shapes) {
+    Float64 sum = 0.0
+    for (s in shapes) {
+        sum += s.area()
+    }
+    return sum
+}
+
+function void main() {
+    stdio.println(identity[Int64](5))
+    stdio.println(identity("text"))
+    stdio.println(identity(2.5))
+    stdio.println(maxOf(3, 9))
+    stdio.println(maxOf("pear", "apple"))
+
+    Box[Int64] b = Box[Int64](10)
+    stdio.println(b.value())
+    Box[String] bs = Box("boxed")
+    stdio.println(bs.value())
+    Box[Int64] b2 = b.with(20)
+    stdio.println(b2.value())
+
+    Pair[String, Int64] p = Pair[String, Int64]("one", 1)
+    stdio.println(p.show())
+    p.second += 1
+    stdio.println(p.second)
+
+    String[] words = String.array()
+    words.insert(0, "a")
+    words.insert(1, "b")
+    stdio.println(countAll(words))
+    Int64[] nums = Int64.array(length = 5, length_immutable = false)
+    stdio.println(countAll(nums))
+
+    Square[] squares = Square.array()
+    squares.insert(0, Square(2.0))
+    squares.insert(1, Square(3.0))
+    stdio.println(totalArea(squares))
+}

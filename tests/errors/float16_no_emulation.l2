@@ -1,0 +1,4 @@
+// error: EnableSoftwareEmulation=true
+function void main() {
+    Float16 h = 1.0
+}

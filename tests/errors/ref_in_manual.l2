@@ -1,0 +1,5 @@
+// error: cannot be used with MemoryManagement=manual
+@compiler(MemoryManagement=manual)
+function void greet(&String s) {}
+function void main() {
+}

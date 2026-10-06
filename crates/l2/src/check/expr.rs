@@ -543,7 +543,16 @@ impl<'a> Checker<'a> {
     }
 
     fn int_literal(&mut self, v: i128, _neg: bool, expected: Option<&Type>, span: Span) -> HExpr {
-        let exp = expected.map(|t| t.deref().non_null());
+        let exp = match expected.map(|t| t.deref().non_null()) {
+            Some(Type::Union(us)) => {
+                if us.contains(&Type::int32()) && IntTy::I32.fits(v) {
+                    Some(Type::int32())
+                } else {
+                    us.iter().find(|u| matches!(u, Type::Int(t) if t.fits(v))).or_else(|| us.iter().find(|u| matches!(u, Type::Float(_) | Type::Big))).cloned()
+                }
+            }
+            other => other,
+        };
         match exp {
             Some(Type::Int(t)) => {
                 if !t.fits(v) {
@@ -877,6 +886,18 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Binary numeric promotion (Java rules): like `coerce`, but int -> float is allowed even
+    /// when it may round.
+    pub fn promote(&mut self, e: HExpr, to: &Type, span: Span) -> HExpr {
+        let from = e.ty.deref().clone();
+        if from != *to && from.is_numeric() && to.is_numeric() && !self.assignable(&from, to) && matches!(to, Type::Float(_)) {
+            let e = self.coerce(e, &from, span);
+            let sp = e.span;
+            return HExpr::new(H::Convert(Box::new(e)), to.clone(), sp);
+        }
+        self.coerce(e, to, span)
+    }
+
     pub fn binary_typed(&mut self, op: BinOp, x: HExpr, y: HExpr, span: Span) -> HExpr {
         let wrap = self.cur_ref().wrap;
         let (xt, yt) = (x.ty.deref().clone(), y.ty.deref().clone());
@@ -919,8 +940,8 @@ impl<'a> Checker<'a> {
                     self.err(span, format!("operator '{}' cannot be applied to {} and {}", op.symbol(), p, q));
                     return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
                 };
-                let x = self.coerce(x, &ct, span);
-                let y = self.coerce(y, &ct, span);
+                let x = self.promote(x, &ct, span);
+                let y = self.promote(y, &ct, span);
                 HExpr::new(H::Arith(arith(op).unwrap(), Box::new(x), Box::new(y), wrap), ct, span)
             }
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
@@ -938,8 +959,8 @@ impl<'a> Checker<'a> {
                     self.err(span, format!("operator '{}' needs integer operands, found {} and {}", op.symbol(), p, q));
                     return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
                 };
-                let x = self.coerce(x, &ct, span);
-                let y = self.coerce(y, &ct, span);
+                let x = self.promote(x, &ct, span);
+                let y = self.promote(y, &ct, span);
                 HExpr::new(H::Arith(arith(op).unwrap(), Box::new(x), Box::new(y), wrap), ct, span)
             }
             BinOp::Shl | BinOp::Shr => {
@@ -968,8 +989,8 @@ impl<'a> Checker<'a> {
                 };
                 let ordering = !matches!(cop, CmpOp::Eq | CmpOp::Ne);
                 if let Some(ct) = common_numeric(&xt, &yt) {
-                    let x = self.coerce(x, &ct, span);
-                    let y = self.coerce(y, &ct, span);
+                    let x = self.promote(x, &ct, span);
+                    let y = self.promote(y, &ct, span);
                     return HExpr::new(H::Cmp(cop, Box::new(x), Box::new(y)), Type::Bool, span);
                 }
                 if ordering {
@@ -1004,7 +1025,11 @@ impl<'a> Checker<'a> {
     }
 
     fn dict_literal(&mut self, entries: &'a [(ast::Expr, ast::Expr)], expected: Option<&Type>, span: Span) -> HExpr {
-        let (kt, vt) = match expected.map(|t| t.deref().non_null()) {
+        let exp = match expected.map(|t| t.deref().non_null()) {
+            Some(Type::Union(us)) => us.into_iter().find(|u| matches!(u, Type::Dict(_, _))).or(Some(Type::Dyn)),
+            other => other,
+        };
+        let (kt, vt) = match exp {
             Some(Type::Dict(k, v)) => (*k, *v),
             Some(Type::Dyn) | None => (Type::Dyn, Type::Dyn),
             Some(other) => {
@@ -1272,7 +1297,29 @@ impl<'a> Checker<'a> {
         let mut best = applicable[0];
         if applicable.len() > 1 {
             let more_specific = |s: &Self, a: usize, b: usize| cands[a].params.iter().zip(cands[b].params.iter()).all(|(x, y)| s.assignable(x, y));
-            let winners: Vec<usize> = applicable.iter().copied().filter(|&a| applicable.iter().all(|&b| a == b || more_specific(self, a, b))).collect();
+            let mut winners: Vec<usize> = applicable.iter().copied().filter(|&a| applicable.iter().all(|&b| a == b || more_specific(self, a, b))).collect();
+            if winners.len() != 1 {
+                // tie-break on literal arguments: prefer the literal's own type family
+                let rank = |p: &Type, e: &ast::Expr| -> u32 {
+                    let is_int = matches!(e.kind, A::Int(_)) || matches!(&e.kind, A::Unary(UnOp::Neg, i) if matches!(i.kind, A::Int(_)));
+                    match (p.deref().non_null(), is_int) {
+                        (Type::Int(IntTy::I32), true) => 0,
+                        (Type::Int(_), true) => 1,
+                        (Type::Float(FloatTy::F64), false) => 0,
+                        (Type::Float(_), _) => 2,
+                        (Type::Big, _) => 3,
+                        _ => 4,
+                    }
+                };
+                let score = |ci: usize| -> u32 {
+                    args.iter().enumerate().filter(|(i, _)| pre[*i].is_none()).map(|(i, a)| rank(&cands[ci].params[i], &a.value)).sum()
+                };
+                let best_score = applicable.iter().map(|&c| score(c)).min().unwrap_or(0);
+                let lit_winners: Vec<usize> = applicable.iter().copied().filter(|&c| score(c) == best_score).collect();
+                if lit_winners.len() == 1 {
+                    winners = lit_winners;
+                }
+            }
             if winners.len() != 1 {
                 self.err(span, format!("call to {} is ambiguous", what));
                 return None;

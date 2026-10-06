@@ -1,0 +1,21 @@
+// expect-exit: 1
+@using sdk 1
+using stdio as stdio
+
+public class Guard implements Droppable {
+    public function void drop() {
+        stdio.println("guard dropped during unwinding")
+    }
+}
+
+function Int64 divide(Int64 a, Int64 b) {
+    Guard g = Guard()
+    return a / b
+}
+
+function void main() {
+    stdio.println("before")
+    stdio.println(divide(10, 2))
+    stdio.println(divide(1, 0))
+    stdio.println("after")
+}

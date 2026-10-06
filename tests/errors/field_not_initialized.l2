@@ -1,0 +1,8 @@
+// error: field 'name' is not initialized
+public class P {
+    private String name
+    public P() {
+    }
+}
+function void main() {
+}

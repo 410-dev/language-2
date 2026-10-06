@@ -1,0 +1,7 @@
+// error: 'setter' cannot be combined with 'Immutable'
+public class P {
+    private setter.chain Immutable Int64 v
+    public P() { this.v = 1 }
+}
+function void main() {
+}

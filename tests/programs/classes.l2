@@ -1,0 +1,171 @@
+@using sdk 1
+using stdio as stdio
+
+public interface Entity {
+    public function Int64 hello()
+
+    public default function String kind() {
+        return "entity"
+    }
+}
+
+public interface MovingEntity extends Entity {
+    public function void move(Int64 dx, Int64 dy)
+
+    public default function Boolean canMove() {
+        return true
+    }
+}
+
+public interface Greeter {
+    public default function String kind() {
+        return "greeter"
+    }
+}
+
+public class Animal {
+    protected String name
+    private static Int64 created = 0
+
+    public Animal(String name) {
+        this.name = name
+        Animal.created += 1
+    }
+
+    public function String speak() {
+        return "..."
+    }
+
+    public function String describe() {
+        return this.name + " says " + this.speak()
+    }
+
+    public static function Int64 count() {
+        return created
+    }
+}
+
+public class Human extends Animal implements MovingEntity, Greeter {
+    public static Immutable String id = "animal.mammal.Human"
+    private setter.chain getter String nickname
+    private setter.chain getter Int64 age
+    private getter Immutable Int64 socialSecurity
+    private Immutable String race
+    private setter.nochain String? eyeColor
+    private Int64 x = 0
+    private Int64 y = 0
+
+    public Human(String name, Int64 age, Int64 socialSecurity) {
+        super(name.clone())
+        this.nickname = name
+        this.age = age
+        this.socialSecurity = socialSecurity
+        this.race = "Someone"
+    }
+
+    @Override
+    public function String speak() {
+        return "hello"
+    }
+
+    @Override
+    public function Int64 hello() {
+        return 42
+    }
+
+    @Override
+    public function String kind() = origin Entity
+
+    public function String bothKinds() {
+        return super(Entity).kind() + "/" + super(Greeter).kind()
+    }
+
+    @Override
+    public function void move(Int64 dx, Int64 dy) {
+        x += dx
+        this.y += dy
+    }
+
+    public function String position() {
+        return f"({x}, {y})"
+    }
+
+    public function String parentDescribe() {
+        return super.describe()
+    }
+
+    @Override
+    public function Boolean equals(&Human other) {
+        return this.socialSecurity == other.socialSecurity()
+    }
+
+    public function String eye() {
+        return this.eyeColor ?? "unknown"
+    }
+}
+
+public class Point {
+    public Int64 x
+    public Int64 y
+
+    public Point(Int64 x, Int64 y) {
+        this.x = x
+        this.y = y
+    }
+
+    public function String toString() {
+        return f"<{x},{y}>"
+    }
+}
+
+public class Plain {
+    public Int64 a = 1
+    public String b = "two"
+}
+
+function void main() {
+    Human alice = Human("Alice", 30, 1234)
+    alice.nickname("Ally").age(31)
+    stdio.println(alice.nickname() + " " + alice.age())
+    stdio.println(alice.describe())
+    stdio.println(alice.parentDescribe())
+    stdio.println(alice.hello())
+    stdio.println(alice.kind())
+    stdio.println(alice.bothKinds())
+    stdio.println(alice.canMove())
+    alice.move(3, 4)
+    alice.move(1, 1)
+    stdio.println(alice.position())
+    stdio.println(alice.eye())
+    alice.eyeColor("green")
+    stdio.println(alice.eye())
+    stdio.println(Human.id)
+
+    Animal generic = Animal("Rex")
+    stdio.println(generic.describe())
+    stdio.println(Animal.count())
+
+    // dynamic dispatch through base class and interface
+    Animal a2 = Human("Bob", 20, 99)
+    stdio.println(a2.speak())
+    MovingEntity me = Human("Carol", 40, 7)
+    stdio.println(me.hello())
+    stdio.println(me.kind())
+
+    // equality
+    Human twin = Human("Alicia", 1, 1234)
+    stdio.println(alice == twin)
+    stdio.println(alice.isSameReferenceWith(twin))
+    stdio.println(alice.isSameReferenceWith(alice))
+    Point p1 = Point(1, 2)
+    Point p2 = Point(1, 2)
+    stdio.println(p1 == p2)
+    stdio.println(p1 != Point(2, 1))
+    stdio.println(p1)
+    stdio.println("p2 = " + p2)
+    Plain pl = Plain()
+    stdio.println(pl)
+    stdio.println(pl == Plain())
+    pl.a = 5
+    stdio.println(pl.a)
+}

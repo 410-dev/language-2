@@ -1,0 +1,7 @@
+// error: already defined in this scope
+function void main() {
+    Int a = 1
+    if (a == 1) {
+        Int a = 2
+    }
+}

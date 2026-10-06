@@ -1,0 +1,11 @@
+// error: conflicting default methods
+public interface A {
+    public default function Int64 hello() { return 1 }
+}
+public interface B {
+    public default function Int64 hello() { return 2 }
+}
+public class C implements A, B {
+}
+function void main() {
+}

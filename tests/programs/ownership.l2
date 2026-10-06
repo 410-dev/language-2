@@ -1,0 +1,123 @@
+@using sdk 1
+using stdio as stdio
+
+public class Resource implements Droppable {
+    private String name
+
+    public Resource(String name) {
+        this.name = name
+        stdio.println("open " + this.name)
+    }
+
+    public function String name() {
+        return this.name.clone()
+    }
+
+    @Override
+    public function void drop() {
+        stdio.println("drop " + this.name)
+    }
+}
+
+public class Holder implements Droppable {
+    private Resource first
+    private Resource second
+
+    public Holder(String tag) {
+        this.first = Resource(tag + ".first")
+        this.second = Resource(tag + ".second")
+    }
+
+    @Override
+    public function void drop() {
+        stdio.println("drop holder")
+    }
+}
+
+function void greet(&String name) {
+    stdio.println("hi " + name)
+}
+
+function void shout(*String name) {
+    name.append("!")
+}
+
+function void addOne(*Int64 count) {
+    count += 1
+}
+
+function Int64 consume(String s) {
+    return s.length()
+}
+
+function void useResource(Resource r) {
+    stdio.println("using " + r.name())
+}
+
+function void failing() {
+    Resource temp = Resource("temp")
+    throw RuntimeException("boom")
+}
+
+function void main() {
+    // moves and clones
+    String a = "hello"
+    String b = a
+    stdio.println(b)
+    String c = b.clone()
+    c.append(" world")
+    stdio.println(b + " / " + c)
+
+    // copied variables clone automatically when used as a move source
+    copied String s = "abcd"
+    String t = s
+    Int64 n = consume(s)
+    stdio.println(s + " " + t + " " + n)
+
+    // references
+    String who = "Alice"
+    greet(&who)
+    greet(who)
+    shout(*who)
+    shout(*who)
+    stdio.println(who)
+    Int64 count = 41
+    addOne(*count)
+    stdio.println(count)
+
+    // drops at scope end, reverse declaration order
+    {
+        Resource r1 = Resource("r1")
+        Resource r2 = Resource("r2")
+        stdio.println("in scope")
+    }
+    stdio.println("after scope")
+
+    // moved values are dropped by their new owner
+    Resource moved = Resource("moved")
+    useResource(moved)
+    stdio.println("after use")
+
+    // fields are dropped after the owner's drop(), in reverse order
+    {
+        Holder h = Holder("h")
+    }
+
+    // reassignment drops the old value
+    Resource re = Resource("old")
+    re = Resource("new")
+    stdio.println("reassigned")
+
+    // drops happen when an exception leaves the scope
+    try {
+        failing()
+    } catch (RuntimeException e) {
+        stdio.println("caught " + e.getMessage())
+    }
+
+    // loop bodies drop each iteration
+    for (Int i = 0; i < 2; i += 1) {
+        Resource it = Resource(f"loop{i}")
+    }
+    stdio.println("end of main")
+}

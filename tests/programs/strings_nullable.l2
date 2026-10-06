@@ -1,0 +1,84 @@
+@using sdk 1
+using stdio as stdio
+
+function String? find(&String[] items, String prefix) {
+    for (it in items) {
+        if (it.startsWith(prefix)) {
+            return it.clone()
+        }
+    }
+    return null
+}
+
+function Int64 lengthOrZero(String? s) {
+    if (s == null) {
+        return 0
+    }
+    return s.length()
+}
+
+function void main() {
+    // nullable
+    String[] items = "apple,banana,cherry".split(",")
+    String? hit = find(items, "ba")
+    String? miss = find(items, "zz")
+    stdio.println(hit ?? "none")
+    stdio.println(miss ?? "none")
+    if (hit != null) {
+        stdio.println(hit.length())
+    }
+    stdio.println(lengthOrZero(miss) + lengthOrZero("four"))
+    Int64? maybeNum = null
+    Int64 n = maybeNum ?? 5
+    stdio.println(n)
+    maybeNum = 9
+    stdio.println(maybeNum! + 1)
+
+    // String methods
+    String s = "Hello, World"
+    stdio.println(s.length())
+    stdio.println(s.substring(7))
+    stdio.println(s.substring(0, 5))
+    stdio.println(s.contains("World"))
+    stdio.println(s.endsWith("ld"))
+    stdio.println(s.indexOf("o"))
+    stdio.println(s.replace("o", "0"))
+    stdio.println(s.replace("o", "0", 1))
+    stdio.println(s.replace("o", "0", 1, true))
+    stdio.println(s.toUpperCase() + " " + s.toLowerCase())
+    stdio.println("  padded  ".trim() + "|")
+    stdio.println("a-b-c-d".split("-", 2))
+    stdio.println("héllo".characters())
+    stdio.println("".isEmpty())
+    String t = "base"
+    t.append("+end")
+    t.prepend("start+")
+    stdio.println(t)
+    stdio.println(s == "Hello, World")
+    stdio.println(s.equals("hello"))
+
+    // format: placeholders only from the literal (injection safe)
+    String name = "%number%"
+    Int64 count = 3
+    stdio.println("Hello %str%, you have %number% messages".format("Bob", count))
+    stdio.println(f"Hi {name}: %count%".format(count))
+    String template = f"Hi {name}: %count%"
+    stdio.println(template.formatWithInjection(1, 2))
+    Float64 loc = 2.5
+    stdio.println(f"x={loc.format(-1, 3)}")
+
+    // DTVariable and unions
+    DTVariable z = 1
+    stdio.println(z)
+    z = "text"
+    stdio.println(z)
+    z = 2.5
+    Float64 back = z.castTo(Float64)
+    stdio.println(back * 2)
+    Int32|String u = 5
+    stdio.println(u)
+    u = "five"
+    stdio.println(u)
+    String us = u.castTo(String)
+    stdio.println(us.length())
+}

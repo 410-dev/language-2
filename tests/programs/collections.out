@@ -1,0 +1,39 @@
+[1, 5, 3, 9]
+4
+1
+9
+3
+1
+9
+5
+3
+[1, 50, 3, 109]
+[1, 3, 50, 109]
+[109, 50, 3, 1]
+removed 50, now [109, 3, 1]
+true
+false
+[109, 3, 1] [-1, 3, 1]
+false
+true
+[7, 7, 7]
+fixed length: insert on a length-immutable array
+["alice", "bob", "carol"]
+0=alice
+1=bob
+2=carol
+2
+{"alice": 30, "bob": 26, "carol": 41}
+30
+3
+false
+alice -> 30
+bob -> 26
+carol -> 41
+alice;bob;carol;
+{"alice": 31, "bob": 26, "carol": 41, "dave": 19}
+26 ["alice", "carol", "dave"] [31, 41, 19]
+{"a": 1, "b": "text", "c": {"d": true}}
+2
+{"a": "b", "n": 1, "d": {"x": "y"}}
+key not found: "nobody"

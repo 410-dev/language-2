@@ -1,0 +1,123 @@
+@using sdk 1
+using stdio as stdio
+
+public class ValidationException extends Exception {
+    private getter Int64 code
+
+    public ValidationException(String message, Int64 code) {
+        super(message)
+        this.code = code
+    }
+}
+
+function Int64 validate(Int64 v) throws ValidationException {
+    if (v < 0) {
+        throw ValidationException("negative value", v)
+    }
+    return v * 2
+}
+
+function String readFile(String path) throws IOException {
+    if (path == "missing.txt") {
+        throw IOException("file not found: " + path)
+    }
+    return "contents of " + path
+}
+
+function Int64 withFinally(Int64 v) {
+    try {
+        if (v > 0) {
+            return v
+        }
+        stdio.println("not returned early")
+    } finally {
+        stdio.println("finally runs for " + v)
+    }
+    return -1
+}
+
+function void main() {
+    try {
+        stdio.println(validate(5))
+        stdio.println(validate(-3))
+        stdio.println("unreachable")
+    } catch (ValidationException e) {
+        stdio.println("caught: " + e.getMessage() + " code=" + e.code())
+    }
+
+    try {
+        String s = readFile("a.txt")
+        stdio.println(s)
+        String t = readFile("missing.txt")
+        stdio.println(t)
+    } catch (IOException e) {
+        stdio.println("io error: " + e.getMessage())
+    } finally {
+        stdio.println("cleanup")
+    }
+
+    stdio.println(withFinally(3))
+    stdio.println(withFinally(0))
+
+    // runtime exceptions
+    try {
+        Int a = 10
+        Int b = 0
+        stdio.println(a / b)
+    } catch (ArithmeticException e) {
+        stdio.println("arith: " + e.getMessage())
+    }
+    try {
+        Int x = Int.MAX
+        x += 1
+    } catch (ArithmeticException e) {
+        stdio.println("overflow: " + e.getMessage())
+    }
+    try {
+        Int64[] arr = Int64.array(length = 3, length_immutable = true)
+        stdio.println(arr[-1])
+        stdio.println(arr[3])
+    } catch (IndexOutOfBoundsException e) {
+        stdio.println("index: " + e.getMessage())
+    }
+    try {
+        DTVariable d = "text"
+        Int64 n = d.castTo(Int64)
+        stdio.println(n)
+    } catch (ClassCastException e) {
+        stdio.println("cast: " + e.getMessage())
+    }
+    try {
+        String? maybe = null
+        String sure = maybe!
+        stdio.println(sure)
+    } catch (NullPointerException e) {
+        stdio.println("npe: " + e.getMessage())
+    }
+    try {
+        throw IllegalArgumentException("bad argument")
+    } catch (IllegalStateLikeError | IllegalArgumentException e) {
+        stdio.println("multi-catch: " + e.getMessage())
+    }
+    try {
+        try {
+            throw RuntimeException("inner")
+        } finally {
+            stdio.println("inner finally")
+        }
+    } catch (RuntimeException e) {
+        stdio.println("outer caught " + e.getMessage())
+    }
+    try {
+        stdio.println(2 ** -1)
+    } catch (ArithmeticException e) {
+        stdio.println(e)
+    }
+    Exception plain = Exception("as value")
+    stdio.println(plain)
+    stdio.println(plain.getMessage())
+}
+
+public class IllegalStateLikeError extends RuntimeException {
+    public IllegalStateLikeError(String m) { super(m) }
+}

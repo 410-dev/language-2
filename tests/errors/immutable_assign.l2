@@ -1,0 +1,5 @@
+// error: 'x' is Immutable
+function void main() {
+    Immutable Int x = 1
+    x = 2
+}

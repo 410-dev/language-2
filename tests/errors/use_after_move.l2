@@ -1,0 +1,7 @@
+// error: use of moved value 'a'
+using stdio as stdio
+function void main() {
+    String a = "hello"
+    String b = a
+    stdio.println(a)
+}

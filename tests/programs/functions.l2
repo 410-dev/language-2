@@ -1,0 +1,90 @@
+@using sdk 1
+using stdio as stdio
+
+function Int64 fib(Int64 n) {
+    if (n < 2) {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+function String describe(Int64 x) {
+    return "Int64 " + x
+}
+
+function String describe(String s) {
+    return "String " + s
+}
+
+function String describe(Float64 f) {
+    return "Float64 " + f
+}
+
+function String describe(DTVariable d) {
+    return "DTVariable " + d
+}
+
+function Int64[] makeArray(Int64 length, Boolean length_immutable) {
+    return Int64.array(length, length_immutable)
+}
+
+function (Int, String, Boolean?) triple(Int n) {
+    if (n > 0) {
+        return n * 2, "pos", true
+    }
+    return (n, "non-pos", null)
+}
+
+function Int apply(Function[(Int), Int] f, Int v) {
+    return f(v)
+}
+
+function Function[(Int), Int] adder(Int k) {
+    return move (Int x) -> x + k
+}
+
+function void main() {
+    stdio.println(fib(20))
+    stdio.println(describe(5))
+    stdio.println(describe("five"))
+    stdio.println(describe(5.5))
+    DTVariable dv = 7
+    stdio.println(describe(dv.clone()))
+    stdio.println(describe(dv.castTo(Int64)))
+
+    Int64[] a = makeArray(length = 3, length_immutable = false)
+    stdio.println(a.length())
+
+    v1, v2, v3 = triple(4)!
+    stdio.println(f"{v1} {v2} {v3}")
+    x, _, z = triple(-1)
+    stdio.println(f"{x} {z}")
+
+    Function[(Int32, Float32), void] f = (Int32 p, Float32 q) -> {
+        stdio.println(f"p={p}, q={q}")
+    }
+    f.run(1, 3.0)
+    f(2, 0.5)
+
+    Int base = 100
+    Function[(Int), Int] addBase = (Int y) -> y + base
+    stdio.println(apply(addBase, 5))
+    stdio.println(apply((v) -> v * v, 9))
+
+    Function[(Int), Int] add3 = adder(3)
+    stdio.println(add3(4))
+
+    // closures capture by reference
+    Int counter = 0
+    Function[(), void] inc = () -> {
+        counter += 1
+    }
+    inc()
+    inc()
+    inc.run()
+    stdio.println(counter)
+
+    // named function as value
+    Function[(Int64), Int64] g = fib
+    stdio.println(g(10))
+}

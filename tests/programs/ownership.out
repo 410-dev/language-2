@@ -1,0 +1,35 @@
+hello
+hello / hello world
+abcd abcd 4
+hi Alice
+hi Alice
+Alice!!
+42
+open r1
+open r2
+in scope
+drop r2
+drop r1
+after scope
+open moved
+using moved
+drop moved
+after use
+open h.first
+open h.second
+drop holder
+drop h.second
+drop h.first
+open old
+open new
+drop old
+reassigned
+open temp
+drop temp
+caught boom
+open loop0
+drop loop0
+open loop1
+drop loop1
+end of main
+drop new

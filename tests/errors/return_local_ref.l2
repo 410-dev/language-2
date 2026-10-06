@@ -1,0 +1,7 @@
+// error: borrowed from 'this'
+function &String make() {
+    String s = "hi"
+    return &s
+}
+function void main() {
+}

@@ -1,0 +1,9 @@
+// error: use of moved value
+public class R {}
+function void take(R r) {}
+function void main() {
+    R r = R()
+    for (Int i = 0; i < 2; i += 1) {
+        take(r)
+    }
+}

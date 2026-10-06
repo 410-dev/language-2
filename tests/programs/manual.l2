@@ -1,0 +1,41 @@
+@using sdk 1
+@compiler(MemoryManagement=manual)
+using stdio as stdio
+
+public class Node implements Droppable {
+    public Int64 value
+    public Node? next
+
+    public Node(Int64 value) {
+        this.value = value
+    }
+
+    public function void drop() {
+        stdio.println(f"free node {value}")
+    }
+}
+
+function void main() {
+    Node a = Node(1)
+    Node b = a
+    b.value = 10
+    stdio.println(a.value)
+    a.next = Node(2)
+    String s = "shared"
+    String t = s
+    stdio.println(s + " " + t)
+    free(a)
+    stdio.println("freed")
+    useAfterFree()
+}
+
+function void useAfterFree() {
+    Node n = Node(5)
+    Node alias = n
+    free(n)
+    try {
+        stdio.println(alias.value)
+    } catch (UseAfterFreeError e) {
+        stdio.println("detected: " + e.getMessage())
+    }
+}

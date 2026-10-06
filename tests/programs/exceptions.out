@@ -1,0 +1,22 @@
+10
+caught: negative value code=-3
+contents of a.txt
+io error: file not found: missing.txt
+cleanup
+finally runs for 3
+3
+not returned early
+finally runs for 0
+-1
+arith: / by zero
+overflow: integer overflow: Int32 +
+0
+index: Index 3 out of bounds for length 3
+cast: String cannot be cast to Int64
+npe: non-null assertion failed: value is null
+multi-catch: bad argument
+inner finally
+outer caught inner
+ArithmeticException: negative exponent for integer power
+Exception: as value
+as value

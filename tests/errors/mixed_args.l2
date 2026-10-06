@@ -1,0 +1,7 @@
+// error: named and positional arguments cannot be mixed
+function Int add(Int a, Int b) {
+    return a + b
+}
+function void main() {
+    Int x = add(1, b = 2)
+}

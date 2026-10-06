@@ -1,0 +1,6 @@
+// error: unreported exception IOException
+function void main() {
+    Function[(), void] f = () -> {
+        throw IOException("x")
+    }
+}
