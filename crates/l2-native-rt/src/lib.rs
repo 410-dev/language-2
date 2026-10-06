@@ -453,6 +453,15 @@ pub unsafe extern "C" fn l2_field_ref(o: BoxPtr, idx: i32) -> BoxPtr {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn l2_elem_ref(parent: BoxPtr, key: BoxPtr) -> BoxPtr {
+    let t = match ref_target(parent) {
+        Some(t) => t,
+        None => RefTarget::Cell(Rc::new(RefCell::new(val(parent)))),
+    };
+    guard_box(builtins::elem_ref(t, val(key), &mut NHost).map(Value::Ref))
+}
+
 // =============================================================================================
 // objects
 

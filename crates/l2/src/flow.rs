@@ -180,6 +180,10 @@ impl<'p> Flow<'p> {
             Place::Deref(id) => self.use_local(*id, span, st),
             Place::Field(o, _) => self.expr(o, st),
             Place::Global(_) => {}
+            Place::Elem(b, k) => {
+                self.place(b, st, span, false);
+                self.expr(k, st);
+            }
         }
     }
 
@@ -445,16 +449,21 @@ fn root_local(e: &Expr) -> Option<LocalId> {
     match &e.kind {
         ExprKind::Local(id) | ExprKind::Move(id) => Some(*id),
         ExprKind::Field(o, _) | ExprKind::Deref(o) | ExprKind::Convert(o) | ExprKind::Unwrap(o) => root_local(o),
-        ExprKind::RefMut(p) => match &**p {
-            Place::Local(id) | Place::Deref(id) => Some(*id),
-            Place::Field(o, _) => root_local(o),
-            Place::Global(_) => None,
-        },
+        ExprKind::RefMut(p) => place_root(p),
         ExprKind::Call(_, args) | ExprKind::CallVirtual(_, args) if matches!(e.ty, Type::Ref(..)) => args.first().and_then(root_local),
         ExprKind::Builtin(l2_runtime::Builtin::ArrAt | l2_runtime::Builtin::ArrFirst | l2_runtime::Builtin::ArrLast | l2_runtime::Builtin::DictGet, args) => {
             args.first().and_then(root_local)
         }
         _ => None,
+    }
+}
+
+fn place_root(p: &Place) -> Option<LocalId> {
+    match p {
+        Place::Local(id) | Place::Deref(id) => Some(*id),
+        Place::Field(o, _) => root_local(o),
+        Place::Global(_) => None,
+        Place::Elem(b, _) => place_root(b),
     }
 }
 

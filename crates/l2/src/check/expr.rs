@@ -802,7 +802,32 @@ impl<'a> Checker<'a> {
                 }
                 None
             }
+            A::Index(base, idx) if idx.len() == 1 => {
+                let (bp, bty, mutable, why) = self.place_of(base)?;
+                let (key, ety) = match bty.deref().clone() {
+                    Type::Array(et) => (self.index_arg(&idx[0]), *et),
+                    Type::Dict(kt, vt) => {
+                        let k = self.expr(&idx[0], Some(&kt));
+                        (self.coerce(k, &kt, idx[0].span), *vt)
+                    }
+                    _ => return None,
+                };
+                // nested element places go through a reference to the root storage
+                self.mark_place_root_cell(&bp);
+                Some((Place::Elem(Box::new(bp), Box::new(key)), ety, mutable, why))
+            }
             _ => None,
+        }
+    }
+
+    fn mark_place_root_cell(&mut self, p: &Place) {
+        match p {
+            Place::Local(id) => {
+                let id = *id;
+                self.cur().locals[id as usize].cell = true;
+            }
+            Place::Elem(b, _) => self.mark_place_root_cell(b),
+            _ => {}
         }
     }
 
@@ -838,6 +863,15 @@ impl<'a> Checker<'a> {
 
     pub fn place_read(&mut self, p: &Place, ty: &Type, span: Span) -> HExpr {
         match p {
+            Place::Elem(b, k) => {
+                let bty = match ty {
+                    _ => Type::Error,
+                };
+                let _ = bty;
+                let base = self.place_read_any(b, span);
+                let bi = if matches!(base.ty.deref(), Type::Dict(_, _)) { Builtin::DictGet } else { Builtin::ArrAt };
+                HExpr::new(H::Builtin(bi, vec![base, (**k).clone()]), ty.clone(), span)
+            }
             Place::Local(id) => self.local_read(*id, span),
             Place::Deref(id) => {
                 let t = self.local_ty(*id);
@@ -845,6 +879,29 @@ impl<'a> Checker<'a> {
             }
             Place::Field(o, idx) => HExpr::new(H::Field(o.clone(), *idx), ty.clone(), span),
             Place::Global(g) => HExpr::new(H::Global(*g), ty.clone(), span),
+        }
+    }
+
+    /// Reads a place whose type is recovered from the place itself.
+    fn place_read_any(&mut self, p: &Place, span: Span) -> HExpr {
+        let ty = self.place_type(p);
+        self.place_read(p, &ty, span)
+    }
+
+    fn place_type(&self, p: &Place) -> Type {
+        match p {
+            Place::Local(id) => self.cur_ref().locals[*id as usize].ty.deref().clone(),
+            Place::Deref(id) => self.cur_ref().locals[*id as usize].ty.deref().clone(),
+            Place::Field(o, idx) => match o.ty.deref() {
+                Type::Class(c) => self.classes[*c as usize].fields[*idx as usize].ty.clone(),
+                _ => Type::Error,
+            },
+            Place::Global(g) => self.globals[*g as usize].ty.clone(),
+            Place::Elem(b, _) => match self.place_type(b) {
+                Type::Array(e) => *e,
+                Type::Dict(_, v) => *v,
+                _ => Type::Error,
+            },
         }
     }
 
@@ -1851,7 +1908,9 @@ impl<'a> Checker<'a> {
                 }
                 // static method call on a class
                 if self.class_decls.contains_key(n) && self.current_class().and_then(|c| self.field_index(c, n)).is_none() {
-                    if let Some(c) = self.class_by_name(n) {
+                    let nparams = self.class_decls[n].1.type_params.len();
+                    let inst = if nparams == 0 { self.class_by_name(n) } else { self.instantiate_class(n, vec![Type::Dyn; nparams], span) };
+                    if let Some(c) = inst {
                         let ms: Vec<MethodInfo> = self.lookup_methods(Owner::Class(c), name).into_iter().filter(|m| m.is_static).collect();
                         if ms.is_empty() {
                             if name == "array" {
@@ -1864,7 +1923,9 @@ impl<'a> Checker<'a> {
                     }
                 }
                 if self.iface_decls.contains_key(n) {
-                    if let Some(i) = self.iface_inst.get(&(n.to_string(), vec![])).copied() {
+                    let nparams = self.iface_decls[n].1.type_params.len();
+                    let inst = if nparams == 0 { self.iface_inst.get(&(n.to_string(), vec![])).copied() } else { self.instantiate_iface(n, vec![Type::Dyn; nparams], span) };
+                    if let Some(i) = inst {
                         let ms: Vec<MethodInfo> = self.lookup_methods(Owner::Iface(i), name).into_iter().filter(|m| m.is_static).collect();
                         if !ms.is_empty() {
                             return self.invoke_methods(ms, None, args, span, true);
@@ -1877,6 +1938,22 @@ impl<'a> Checker<'a> {
                 if is_builtin_type_name(n) {
                     return self.builtin_static_call(n, name, args, expected, span);
                 }
+            }
+        }
+        // `T.array()` for a type parameter, `Int64[].array()` for array element types
+        if name == "array" {
+            if let A::Ident(n) = &obj.kind {
+                if self.lookup_local(n).is_none() {
+                    if let Some(t) = self.cur_ref().subst.get(n).cloned() {
+                        return self.array_new(t, args, span);
+                    }
+                }
+            }
+            if let A::TypeLit(te) = &obj.kind {
+                let module = self.current_module();
+                let subst = self.cur_ref().subst.clone();
+                let t = self.resolve_type(te, module, &subst);
+                return self.array_new(t, args, span);
             }
         }
         // `T[A, B].array(...)` for composite element types (Function[...], Box[Int64], ...)

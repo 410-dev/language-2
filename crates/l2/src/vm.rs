@@ -322,6 +322,27 @@ impl<'p> Vm<'p> {
                     let obj = tri!(self.object(&o));
                     stack.push(Value::Ref(RefTarget::Field(obj, idx as usize)));
                 }
+                Op::ElemRef => {
+                    let key = pop!();
+                    let parent = match pop!() {
+                        Value::Ref(t) => t,
+                        other => RefTarget::Cell(Rc::new(RefCell::new(other))),
+                    };
+                    let r = tri!(builtins::elem_ref(parent, key, self));
+                    stack.push(Value::Ref(r));
+                }
+                Op::StoreRef(drop_old) => {
+                    let r = pop!();
+                    let v = pop!();
+                    if let Value::Ref(t) = r {
+                        if drop_old {
+                            let old = t.get();
+                            t.set(Value::Void);
+                            tri!(self.drop_value(old));
+                        }
+                        t.set(v);
+                    }
+                }
                 Op::Deref => {
                     let v = pop!();
                     stack.push(v.deref());

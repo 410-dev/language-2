@@ -186,6 +186,7 @@ declare ptr @l2_ref_get(ptr)
 declare ptr @l2_ref_take(ptr)
 declare void @l2_ref_set(ptr, ptr)
 declare ptr @l2_field_ref(ptr, i32)
+declare ptr @l2_elem_ref(ptr, ptr)
 declare ptr @l2_new_object(i32)
 declare i32 @l2_class_of(ptr)
 declare ptr @l2_get_field(ptr, i32)
@@ -1119,6 +1120,18 @@ impl<'m, 'p, 'h> FnGen<'m, 'p, 'h> {
                 self.release(&ov);
                 self.check();
             }
+            Place::Elem(..) => {
+                let r = self.place_ref(place);
+                let b = self.to_box(v, ty);
+                if drop_old {
+                    let old = self.call_val(Repr::Ptr, "l2_ref_get", &[r.typed()]);
+                    self.line(&format!("call void @l2_drop_value(ptr {})", old));
+                    self.line(&format!("call void @l2_free(ptr {})", old));
+                    self.check();
+                }
+                self.line(&format!("call void @l2_ref_set({}, {})", r.typed(), b.typed()));
+                self.release(&r);
+            }
             Place::Global(g) => {
                 let c = self.t();
                 self.line(&format!("{} = load ptr, ptr @g.{}", c, g));
@@ -1209,6 +1222,16 @@ impl<'m, 'p, 'h> FnGen<'m, 'p, 'h> {
                 let c = self.t();
                 self.line(&format!("{} = load ptr, ptr @g.{}", c, g));
                 self.own(V::new(Repr::Ptr, c, false))
+            }
+            Place::Elem(b, k) => {
+                let parent = self.place_ref(b);
+                let kv = self.expr(k);
+                let kb = self.to_box(kv, &k.ty);
+                let r = self.call_val(Repr::Ptr, "l2_elem_ref", &[parent.typed(), kb.typed()]);
+                self.release(&parent);
+                self.release(&kb);
+                self.check();
+                V::new(Repr::Ptr, r, true)
             }
         }
     }

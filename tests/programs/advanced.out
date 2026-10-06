@@ -1,0 +1,20 @@
+true
+2
+["a", "b"]
+container
+false
+1
+[v1.9, v2.0, v2.1]
+true
+true
+true
+toString threw: no printing
+nested toString threw: no printing
+2
+43
+xyzyz
+leaving scope
+drop tracked 1
+drop tracked 2
+[[0, 0, 0], [1, 1, 9], [2, 2, 2]]
+{"core": v1.2, "ui": v0.5}

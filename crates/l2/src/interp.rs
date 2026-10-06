@@ -267,6 +267,14 @@ impl<'p> Interp<'p> {
                 Value::Ref(RefTarget::Field(obj, *idx as usize))
             }
             Place::Global(g) => Value::Ref(RefTarget::Cell(self.globals[*g as usize].clone())),
+            Place::Elem(b, k) => {
+                let parent = match self.place_ref(fr, b)? {
+                    Value::Ref(t) => t,
+                    other => RefTarget::Cell(Rc::new(RefCell::new(other))),
+                };
+                let key = self.eval(fr, k)?;
+                Value::Ref(builtins::elem_ref(parent, key, self)?)
+            }
         })
     }
 
@@ -325,6 +333,12 @@ impl<'p> Interp<'p> {
             }
             Place::Global(g) => {
                 *self.globals[*g as usize].borrow_mut() = v;
+                Ok(())
+            }
+            Place::Elem(..) => {
+                if let Value::Ref(r) = self.place_ref(fr, p)? {
+                    r.set(v);
+                }
                 Ok(())
             }
         }

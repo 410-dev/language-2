@@ -27,6 +27,10 @@ pub enum Op {
     SetField(u32, bool),
     /// stack: obj -> ref
     FieldRef(u32),
+    /// stack: parent ref, key -> element ref
+    ElemRef,
+    /// stack: value, ref
+    StoreRef(bool),
     Deref,
     /// stack: value; writes through the `*T` held in the local
     StoreDeref(u32, bool),
@@ -161,7 +165,8 @@ fn effect(op: &Op) -> (u32, u32) {
     match *op {
         Op::Const(_) | Op::Dup | Op::LoadLocal(_) | Op::LoadLocalRaw(_) | Op::MoveLocal(_) | Op::LocalRef(_) | Op::LoadGlobal(_) | Op::GlobalRef(_) | Op::FuncRef(_) => (0, 1),
         Op::Pop | Op::StoreLocal(..) | Op::StoreGlobal(..) | Op::StoreDeref(..) | Op::JumpIfFalse(_) | Op::JumpIfTrue(_) | Op::DropTop | Op::Free | Op::Return | Op::Throw => (1, 0),
-        Op::SetField(..) => (2, 0),
+        Op::SetField(..) | Op::StoreRef(_) => (2, 0),
+        Op::ElemRef => (2, 1),
         Op::GetField(_) | Op::FieldRef(_) | Op::Deref | Op::TupleGet(_) | Op::Neg(_) | Op::BitNot | Op::Not | Op::NonNull(_) | Op::Convert(_) | Op::Cast(..) => (1, 1),
         Op::MakeTuple(n) | Op::Concat(n) | Op::Call(_, n) | Op::CallVirtual(_, n) | Op::New(_, _, n) | Op::Builtin(_, n) | Op::BuiltinMutLocal(_, _, n) | Op::MakeClosure(_, n) => (n, 1),
         Op::MakeDict(n) => (2 * n, 1),
@@ -350,6 +355,11 @@ impl<'h> FnCompiler<'h> {
                     Place::Global(g) => {
                         self.expr(e);
                         self.emit(Op::StoreGlobal(*g, d));
+                    }
+                    Place::Elem(..) => {
+                        self.expr(e);
+                        self.place_ref(place);
+                        self.emit(Op::StoreRef(d));
                     }
                 }
             }
@@ -602,6 +612,11 @@ impl<'h> FnCompiler<'h> {
             }
             Place::Global(g) => {
                 self.emit(Op::GlobalRef(*g));
+            }
+            Place::Elem(b, k) => {
+                self.place_ref(b);
+                self.expr(k);
+                self.emit(Op::ElemRef);
             }
         }
     }

@@ -155,6 +155,8 @@ pub enum Place {
     Deref(LocalId),
     Field(Box<Expr>, u32),
     Global(GlobalId),
+    /// An element of the array / dictionary at another place (`grid[1][2] = 9`).
+    Elem(Box<Place>, Box<Expr>),
 }
 
 #[derive(Clone, Debug)]

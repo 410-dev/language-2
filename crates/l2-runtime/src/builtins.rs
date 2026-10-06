@@ -773,6 +773,27 @@ pub fn call_mut<H: Host>(b: Builtin, recv: &mut Value, args: Vec<Value>, h: &mut
     })
 }
 
+/// Creates a reference to an element of the container stored at `parent` (nested element
+/// places such as `grid[1][2] = 9`), validating the index / key.
+pub fn elem_ref<H: Host>(parent: RefTarget, key: Value, h: &mut H) -> Result<RefTarget, H::Err> {
+    match parent.get().deref() {
+        Value::Array(a) => {
+            let i = norm_index(key.deref().as_int(), a.items.len(), h)?;
+            Ok(RefTarget::Elem(Rc::new((parent, Value::i64(i as i64)))))
+        }
+        Value::Dict(d) => {
+            let k = key.deref();
+            if d.get(&k).is_none() {
+                let ks = to_display_nested(&k, h)?;
+                return Err(h.throw(ExcKind::IllegalArgument, format!("key not found: {}", ks)));
+            }
+            Ok(RefTarget::Elem(Rc::new((parent, k))))
+        }
+        Value::Null => Err(h.throw(ExcKind::NullPointer, "indexing null".into())),
+        other => Err(h.throw(ExcKind::ClassCast, format!("{} cannot be indexed", other.type_name()))),
+    }
+}
+
 /// Marks an object (and the objects it owns) as freed (`free(x)` in manual mode).
 pub fn free_value(v: &Value) {
     match v {

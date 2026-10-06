@@ -322,6 +322,9 @@ pub struct Closure {
 pub enum RefTarget {
     Cell(Rc<RefCell<Value>>),
     Field(Rc<Object>, usize),
+    /// An element of the array / dictionary stored at the parent location. The key is already
+    /// validated (normalised array index or existing dictionary key).
+    Elem(Rc<(RefTarget, Value)>),
 }
 
 impl RefTarget {
@@ -329,28 +332,59 @@ impl RefTarget {
         match self {
             RefTarget::Cell(c) => c.borrow().clone(),
             RefTarget::Field(o, i) => o.fields.borrow()[*i].clone(),
+            RefTarget::Elem(pk) => match pk.0.get() {
+                Value::Array(a) => a.items.get(pk.1.as_int() as usize).cloned().unwrap_or(Value::Null),
+                Value::Dict(d) => d.get(&pk.1).cloned().unwrap_or(Value::Null),
+                _ => Value::Null,
+            },
         }
     }
     pub fn set(&self, v: Value) {
         match self {
             RefTarget::Cell(c) => *c.borrow_mut() = v,
             RefTarget::Field(o, i) => o.fields.borrow_mut()[*i] = v,
+            RefTarget::Elem(..) => self.with_mut(|slot| *slot = v),
         }
     }
     pub fn with_mut<R>(&self, f: impl FnOnce(&mut Value) -> R) -> R {
+        let mut f = Some(f);
+        let mut out = None;
+        self.with_mut_dyn(&mut |v| {
+            if let Some(f) = f.take() {
+                out = Some(f(v));
+            }
+        });
+        out.expect("with_mut callback not invoked")
+    }
+
+    fn with_mut_dyn(&self, f: &mut dyn FnMut(&mut Value)) {
         match self {
+            RefTarget::Elem(pk) => pk.0.with_mut_dyn(&mut |pv| match pv {
+                Value::Array(a) => {
+                    let m = Rc::make_mut(a);
+                    let i = pk.1.as_int() as usize;
+                    let mut x = std::mem::replace(&mut m.items[i], Value::Void);
+                    f(&mut x);
+                    m.items[i] = x;
+                }
+                Value::Dict(d) => {
+                    let m = Rc::make_mut(d);
+                    let mut x = m.get(&pk.1).cloned().unwrap_or(Value::Null);
+                    f(&mut x);
+                    m.insert(pk.1.clone(), x);
+                }
+                _ => f(&mut Value::Null),
+            }),
             RefTarget::Cell(c) => {
                 // Take the value out so that re-entrant access (e.g. callbacks) cannot alias.
                 let mut v = std::mem::replace(&mut *c.borrow_mut(), Value::Void);
-                let r = f(&mut v);
+                f(&mut v);
                 *c.borrow_mut() = v;
-                r
             }
             RefTarget::Field(o, i) => {
                 let mut v = std::mem::replace(&mut o.fields.borrow_mut()[*i], Value::Void);
-                let r = f(&mut v);
+                f(&mut v);
                 o.fields.borrow_mut()[*i] = v;
-                r
             }
         }
     }

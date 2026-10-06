@@ -1,0 +1,172 @@
+@using sdk 1
+using stdio as stdio
+
+public interface Container[T] {
+    public function void put(T item)
+    public function Int64 size()
+
+    public default function Boolean isEmpty() {
+        return this.size() == 0
+    }
+
+    public static function String kind() {
+        return "container"
+    }
+}
+
+public class Bag[T] implements Container[T] {
+    private T[] items
+
+    public Bag() {
+        this.items = T.array()
+    }
+
+    public function void put(T item) {
+        this.items.insert(this.items.length(), item)
+    }
+
+    public function Int64 size() {
+        return items.length()
+    }
+
+    public function &T[] all() {
+        return &this.items
+    }
+}
+
+public class Version implements Comparable {
+    public Int64 major
+    public Int64 minor
+
+    public Version(Int64 major, Int64 minor) {
+        this.major = major
+        this.minor = minor
+    }
+
+    public function Int32 compareTo(&Version other) {
+        if (major != other.major) {
+            return major < other.major ? -1 : 1
+        }
+        return minor == other.minor ? 0 : (minor < other.minor ? -1 : 1)
+    }
+
+    public function String toString() {
+        return f"v{major}.{minor}"
+    }
+
+    @Override
+    public function Boolean equals(&Version other) {
+        return major == other.major
+    }
+}
+
+public class Grumpy {
+    public function String toString() {
+        throw IllegalArgumentException("no printing")
+    }
+}
+
+public class Tracked implements Droppable {
+    private Int64 id
+    public Tracked(Int64 id) { this.id = id }
+    public function void drop() {
+        stdio.println(f"drop tracked {id}")
+    }
+}
+
+public class Stats {
+    public static Int64 total = Stats.seed() * 2
+    public Int64 hits = 0
+
+    public static function Int64 seed() {
+        return 21
+    }
+}
+
+function void bump(*Int64 v) {
+    v += 1
+}
+
+function void appendAll(*String s, copied String suffix) {
+    s.append(suffix)
+    s.append(suffix)
+}
+
+function void main() {
+    Bag[String] bag = Bag[String]()
+    stdio.println(bag.isEmpty())
+    bag.put("a")
+    bag.put("b")
+    stdio.println(bag.size())
+    stdio.println(bag.all())
+    stdio.println(Container.kind())
+    Container[String] c = Bag[String]()
+    c.put("z")
+    stdio.println(c.isEmpty())
+
+    Bag[Bag[Int64]] nested = Bag[Bag[Int64]]()
+    Bag[Int64] inner = Bag[Int64]()
+    inner.put(42)
+    nested.put(inner)
+    stdio.println(nested.size())
+
+    // sorting with compareTo, printing with toString, == with equals
+    Version[] vs = Version.array()
+    vs.insert(0, Version(2, 1))
+    vs.insert(1, Version(1, 9))
+    vs.insert(2, Version(2, 0))
+    vs.sort()
+    stdio.println(vs)
+    stdio.println(Version(3, 1) == Version(3, 7))
+    stdio.println(Version(3, 1) < Version(3, 7))
+    stdio.println(vs.contains(Version(1, 0)))
+
+    // exceptions thrown by user code called back from the runtime
+    try {
+        stdio.println(Grumpy())
+    } catch (IllegalArgumentException e) {
+        stdio.println("toString threw: " + e.getMessage())
+    }
+    try {
+        Grumpy[] gs = Grumpy.array()
+        gs.insert(0, Grumpy())
+        String s = "list: " + gs
+        stdio.println(s)
+    } catch (IllegalArgumentException e) {
+        stdio.println("nested toString threw: " + e.getMessage())
+    }
+
+    // mutable references to fields and statics
+    Stats st = Stats()
+    bump(*st.hits)
+    bump(*st.hits)
+    stdio.println(st.hits)
+    bump(*Stats.total)
+    stdio.println(Stats.total)
+    String text = "x"
+    appendAll(*text, "yz")
+    stdio.println(text)
+
+    // arrays of droppable objects are dropped element by element
+    {
+        Tracked[] ts = Tracked.array()
+        ts.insert(0, Tracked(1))
+        ts.insert(1, Tracked(2))
+        stdio.println("leaving scope")
+    }
+
+    // arrays of arrays
+    Int64[][] grid = Int64[].array()
+    for (Int64 r = 0; r < 3; r += 1) {
+        Int64[] row = Int64.array(length = 3, length_immutable = true)
+        row.fill(r)
+        grid.insert(grid.length(), row)
+    }
+    grid[1][2] = 9
+    stdio.println(grid)
+
+    // dictionary of objects
+    Dictionary[String, Version] latest = {"core": Version(1, 2)}
+    latest["ui"] = Version(0, 5)
+    stdio.println(latest)
+}

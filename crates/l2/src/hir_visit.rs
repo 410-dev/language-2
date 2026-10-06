@@ -3,8 +3,13 @@
 use crate::hir::*;
 
 pub fn walk_place(p: &Place, f: &mut dyn FnMut(&Expr)) {
-    if let Place::Field(e, _) = p {
-        walk_expr(e, f);
+    match p {
+        Place::Field(e, _) => walk_expr(e, f),
+        Place::Elem(b, k) => {
+            walk_place(b, f);
+            walk_expr(k, f);
+        }
+        _ => {}
     }
 }
 
