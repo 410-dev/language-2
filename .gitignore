@@ -1,0 +1,7 @@
+target/
+/out/
+*.obj
+*.o
+*.ll
+*.exe
+*.pdb
