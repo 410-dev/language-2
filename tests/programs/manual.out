@@ -1,0 +1,7 @@
+10
+shared shared
+free node 10
+free node 2
+freed
+free node 5
+detected: use of freed object

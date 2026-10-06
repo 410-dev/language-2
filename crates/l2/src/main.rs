@@ -49,12 +49,19 @@ fn main() -> ExitCode {
     }
     match cmd {
         "check" => ExitCode::SUCCESS,
+        "disasm" => {
+            let m = l2::bytecode::compile(&comp.program);
+            print!("{}", l2::bytecode::disassemble(&comp.program, &m));
+            ExitCode::SUCCESS
+        }
         "run" => {
-            let _ = backend;
             let p = comp.program;
             let code = std::thread::Builder::new()
                 .stack_size(1 << 30)
-                .spawn(move || l2::interp::run(&p, prog_args))
+                .spawn(move || match backend.as_str() {
+                    "bytecode" | "vm" => l2::vm::run(&p, prog_args),
+                    _ => l2::interp::run(&p, prog_args),
+                })
                 .unwrap()
                 .join()
                 .unwrap_or(101);

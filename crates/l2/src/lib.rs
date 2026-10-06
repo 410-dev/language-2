@@ -12,6 +12,8 @@ pub mod flow;
 pub mod hir;
 pub mod hir_visit;
 pub mod interp;
+pub mod bytecode;
+pub mod vm;
 pub mod lexer;
 pub mod parser;
 pub mod types;
