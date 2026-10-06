@@ -171,7 +171,7 @@ pub fn common_numeric(a: &Type, b: &Type) -> Option<Type> {
             }
             Some(Type::Float(t))
         }
-        (Type::Float(f), Type::Big) | (Type::Big, Type::Float(f)) => Some(Type::Float(if *f == FloatTy::F64 { FloatTy::F64 } else { FloatTy::F64 })),
+        (Type::Float(_), Type::Big) | (Type::Big, Type::Float(_)) => Some(Type::Float(FloatTy::F64)),
         _ => None,
     }
 }

@@ -291,11 +291,6 @@ impl<'p> Interp<'p> {
                     Value::Ref(r) => r,
                     _ => unreachable!(),
                 };
-                let target = if let Place::Deref(_) = p {
-                    target
-                } else {
-                    target
-                };
                 let mut v = target.get();
                 target.set(Value::Void);
                 let r = f(self, &mut v);

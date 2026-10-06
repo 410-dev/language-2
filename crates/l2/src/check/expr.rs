@@ -370,19 +370,9 @@ impl<'a> Checker<'a> {
             if !self.is_checked_exception(c) {
                 continue;
             }
-            let mut handled = false;
-            for ctx in self.fstack.iter().rev() {
-                if ctx.catch_stack.iter().any(|cs| cs.iter().any(|&k| self.is_subclass(c, k))) {
-                    handled = true;
-                    break;
-                }
-                if ctx.declared_throws.iter().any(|&k| self.is_subclass(c, k)) {
-                    handled = true;
-                    break;
-                }
-                // checked exceptions cannot escape a lambda body
-                break;
-            }
+            // only the innermost function counts: checked exceptions cannot escape a lambda body
+            let ctx = self.cur_ref();
+            let handled = ctx.catch_stack.iter().any(|cs| cs.iter().any(|&k| self.is_subclass(c, k))) || ctx.declared_throws.iter().any(|&k| self.is_subclass(c, k));
             if !handled {
                 let n = self.classes[c as usize].name.clone();
                 self.err(span, format!("unreported exception {}; it must be caught or declared to be thrown", n));
@@ -872,10 +862,6 @@ impl<'a> Checker<'a> {
     pub fn place_read(&mut self, p: &Place, ty: &Type, span: Span) -> HExpr {
         match p {
             Place::Elem(b, k) => {
-                let bty = match ty {
-                    _ => Type::Error,
-                };
-                let _ = bty;
                 let base = self.place_read_any(b, span);
                 let bi = if matches!(base.ty.deref(), Type::Dict(_, _)) { Builtin::DictGet } else { Builtin::ArrAt };
                 HExpr::new(H::Builtin(bi, vec![base, (**k).clone()]), ty.clone(), span)
