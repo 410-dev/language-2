@@ -151,6 +151,8 @@ cargo test
 - `interpreter`, `bytecode_vm`, `native_compiler`: `tests/programs`의 모든 프로그램을 각 백엔드로 실행해 stdout/stderr/종료 코드를 비교 (네이티브 툴체인이 없으면 건너뜀)
 - `compile_errors`: `tests/errors`의 각 파일이 기대한 메시지로 컴파일에 실패하는지 확인
 - manual 모드의 해제 후 접근은 네이티브에서 정의되지 않은 동작이므로 차분 테스트에서 제외합니다 (사양 15.3).
+- `tools/fuzz_mutate.py <seed> <count> [native]`: 테스트 프로그램을 무작위로 변형해 컴파일러 패닉과 백엔드 간 출력 차이를 찾는 퍼저
+- `tools/fuzz_arith.py <seed> <rounds>`: 모든 정수 폭·두 오버플로 정책에 대한 무작위 산술 프로그램을 세 백엔드로 비교하는 퍼저
 
 ## 사양 구현 현황
 
