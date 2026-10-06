@@ -1,0 +1,90 @@
+// Prelude: implicitly visible in every module (spec 7.6 exception hierarchy, 9.6 Droppable).
+@using sdk 1
+
+public class Throwable {
+    private Immutable String message
+
+    public Throwable(String message) {
+        this.message = message
+    }
+
+    public Throwable() {
+        this.message = ""
+    }
+
+    public function String getMessage() {
+        return this.message.clone()
+    }
+}
+
+public class Error extends Throwable {
+    public Error(String message) { super(message) }
+    public Error() { super() }
+}
+
+public class Exception extends Throwable {
+    public Exception(String message) { super(message) }
+    public Exception() { super() }
+}
+
+public class IOException extends Exception {
+    public IOException(String message) { super(message) }
+    public IOException() { super() }
+}
+
+public class RuntimeException extends Exception {
+    public RuntimeException(String message) { super(message) }
+    public RuntimeException() { super() }
+}
+
+public class NullPointerException extends RuntimeException {
+    public NullPointerException(String message) { super(message) }
+    public NullPointerException() { super() }
+}
+
+public class ArithmeticException extends RuntimeException {
+    public ArithmeticException(String message) { super(message) }
+    public ArithmeticException() { super() }
+}
+
+public class ClassCastException extends RuntimeException {
+    public ClassCastException(String message) { super(message) }
+    public ClassCastException() { super() }
+}
+
+public class IndexOutOfBoundsException extends RuntimeException {
+    public IndexOutOfBoundsException(String message) { super(message) }
+    public IndexOutOfBoundsException() { super() }
+}
+
+public class IllegalArgumentException extends RuntimeException {
+    public IllegalArgumentException(String message) { super(message) }
+    public IllegalArgumentException() { super() }
+}
+
+public class UnsupportedOperationException extends RuntimeException {
+    public UnsupportedOperationException(String message) { super(message) }
+    public UnsupportedOperationException() { super() }
+}
+
+public class OutOfMemoryError extends Error {
+    public OutOfMemoryError(String message) { super(message) }
+    public OutOfMemoryError() { super() }
+}
+
+public class StackOverflowError extends Error {
+    public StackOverflowError(String message) { super(message) }
+    public StackOverflowError() { super() }
+}
+
+public class UseAfterFreeError extends Error {
+    public UseAfterFreeError(String message) { super(message) }
+    public UseAfterFreeError() { super() }
+}
+
+public interface Droppable {
+    public function void drop()
+}
+
+public interface Comparable {
+}

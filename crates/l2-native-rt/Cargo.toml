@@ -1,0 +1,11 @@
+[package]
+name = "l2-native-rt"
+version.workspace = true
+edition.workspace = true
+description = "C ABI runtime library statically linked into native language-2 executables"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+l2-runtime = { path = "../l2-runtime" }

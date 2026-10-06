@@ -1,0 +1,7 @@
+[package]
+name = "l2-runtime"
+version.workspace = true
+edition.workspace = true
+description = "Shared runtime value model and builtins for language-2 (interpreter, VM, native)"
+
+[dependencies]

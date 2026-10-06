@@ -1,0 +1,16 @@
+[package]
+name = "language-2"
+version.workspace = true
+edition.workspace = true
+description = "language-2: front end, tree-walking interpreter, bytecode VM and LLVM native compiler"
+
+[lib]
+name = "l2"
+path = "src/lib.rs"
+
+[[bin]]
+name = "language-2"
+path = "src/main.rs"
+
+[dependencies]
+l2-runtime = { path = "../l2-runtime" }
