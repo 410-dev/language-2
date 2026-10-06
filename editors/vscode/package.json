@@ -1,0 +1,27 @@
+{
+  "name": "language-2-syntax",
+  "displayName": "language-2 Syntax",
+  "description": "Syntax highlighting for language-2 (.l2) source files",
+  "version": "0.1.0",
+  "publisher": "language-2",
+  "license": "MIT",
+  "engines": { "vscode": "^1.60.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "language-2",
+        "aliases": ["language-2", "l2"],
+        "extensions": [".l2"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "language-2",
+        "scopeName": "source.l2",
+        "path": "./syntaxes/language-2.tmLanguage.json"
+      }
+    ]
+  }
+}

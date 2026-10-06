@@ -1,0 +1,177 @@
+// A terminal calculator: reads expressions line by line and evaluates them.
+// Supports + - * / % ^, unary minus, parentheses and `ans` (the previous result).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+
+// Splits an input line into number, operator and name tokens.
+function String[] tokenize(&String line) {
+    String[] tokens = String.array()
+    String current = ""
+    for (c in line.characters()) {
+        if ("0123456789.".contains(c) or (not current.isEmpty() and "abcdefghijklmnopqrstuvwxyz".contains(c))) {
+            current.append(c)
+            continue
+        }
+        if (not current.isEmpty()) {
+            tokens.insert(tokens.length(), current)
+            current = ""
+        }
+        if ("abcdefghijklmnopqrstuvwxyz".contains(c)) {
+            current.append(c)
+        } else if ("+-*/%^()".contains(c)) {
+            tokens.insert(tokens.length(), c.clone())
+        } else if (c != " ") {
+            throw IllegalArgumentException(f"unexpected character '{c}'")
+        }
+    }
+    if (not current.isEmpty()) {
+        tokens.insert(tokens.length(), current)
+    }
+    return tokens
+}
+
+// Recursive-descent parser that evaluates while it parses.
+//   expr    := term (('+' | '-') term)*
+//   term    := unary (('*' | '/' | '%') unary)*
+//   unary   := '-' unary | power
+//   power   := primary ('^' unary)?
+//   primary := number | 'ans' | '(' expr ')'
+public class Parser {
+    private String[] tokens
+    private Int64 pos
+    private Float64 ans
+
+    public Parser(String[] tokens, Float64 ans) {
+        this.tokens = tokens
+        this.pos = 0
+        this.ans = ans
+    }
+
+    private function String peek() {
+        if (pos >= tokens.length()) {
+            return ""
+        }
+        return tokens[pos].clone()
+    }
+
+    private function String next() {
+        String t = peek()
+        pos += 1
+        return t
+    }
+
+    public function Float64 parse() {
+        Float64 v = expr()
+        if (pos < tokens.length()) {
+            throw IllegalArgumentException(f"unexpected '{peek()}'")
+        }
+        return v
+    }
+
+    private function Float64 expr() {
+        Float64 v = term()
+        for (;;) {
+            String op = peek()
+            if (op == "+") {
+                next()
+                v = v + term()
+            } else if (op == "-") {
+                next()
+                v = v - term()
+            } else {
+                break
+            }
+        }
+        return v
+    }
+
+    private function Float64 term() {
+        Float64 v = unary()
+        for (;;) {
+            String op = peek()
+            if (op == "*") {
+                next()
+                v = v * unary()
+            } else if (op == "/" or op == "%") {
+                next()
+                Float64 r = unary()
+                if (r == 0.0) {
+                    throw ArithmeticException("division by zero")
+                }
+                v = op == "/" ? v / r : v % r
+            } else {
+                break
+            }
+        }
+        return v
+    }
+
+    private function Float64 unary() {
+        if (peek() == "-") {
+            next()
+            return -unary()
+        }
+        return power()
+    }
+
+    private function Float64 power() {
+        Float64 base = primary()
+        if (peek() == "^") {
+            next()
+            return base ** unary()
+        }
+        return base
+    }
+
+    private function Float64 primary() {
+        String t = next()
+        if (t == "(") {
+            Float64 v = expr()
+            if (next() != ")") {
+                throw IllegalArgumentException("missing ')'")
+            }
+            return v
+        }
+        if (t == "ans") {
+            return ans
+        }
+        if (t.isEmpty()) {
+            throw IllegalArgumentException("unexpected end of input")
+        }
+        return t.parse(Float64)
+    }
+}
+
+// Prints up to 6 decimals, dropping trailing zeros ("2.500000" -> "2.5", "7.000000" -> "7").
+function String show(Float64 v) {
+    String s = v.format(-1, 6)
+    for (; s.endsWith("0");) {
+        s = s.substring(0, s.length() - 1)
+    }
+    if (s.endsWith(".")) {
+        s = s.substring(0, s.length() - 1)
+    }
+    return s
+}
+
+function void main() {
+    stdio.println("Calculator — operators: + - * / % ^ ( ), 'ans' = last result, 'q' to quit")
+    Float64 ans = 0.0
+    for (;;) {
+        String line = stdio.read("> ")
+        if (line.isEmpty() or line == "q" or line == "quit") {
+            break
+        }
+        try {
+            String[] tokens = tokenize(&line)
+            Parser p = Parser(tokens, ans)
+            ans = p.parse()
+            stdio.println("= " + show(ans))
+        } catch (Exception e) {
+            stdio.println("error: " + e.getMessage())
+        }
+    }
+    stdio.println("bye")
+}

@@ -1,0 +1,217 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "language-2",
+  "scopeName": "source.l2",
+  "fileTypes": ["l2"],
+  "patterns": [{ "include": "#code" }],
+  "repository": {
+    "code": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#annotations" },
+        { "include": "#fstrings" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#declarations" },
+        { "include": "#keywords" },
+        { "include": "#types" },
+        { "include": "#functions" },
+        { "include": "#operators" }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.documentation.l2",
+          "begin": "/\\*\\*(?!/)",
+          "end": "\\*\\*?/",
+          "captures": { "0": { "name": "punctuation.definition.comment.l2" } }
+        },
+        {
+          "name": "comment.block.l2",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "captures": { "0": { "name": "punctuation.definition.comment.l2" } }
+        },
+        {
+          "name": "comment.line.double-slash.l2",
+          "begin": "//",
+          "end": "$",
+          "beginCaptures": { "0": { "name": "punctuation.definition.comment.l2" } }
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "comment": "@using sdk 1 / @runtime compiler interpreter bytecode",
+          "match": "^\\s*(@(?:using|runtime))\\b(.*)$",
+          "captures": {
+            "1": { "name": "keyword.other.directive.l2" },
+            "2": { "patterns": [{ "include": "#numbers" }, { "include": "#comments" }, { "match": "\\b\\w+\\b", "name": "constant.language.directive-value.l2" }] }
+          }
+        },
+        {
+          "comment": "@compiler( ... ) / @runtimecfg( ... ) option blocks",
+          "begin": "(@(?:compiler|runtimecfg))\\s*(\\()",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.directive.l2" },
+            "2": { "name": "punctuation.section.parens.begin.l2" }
+          },
+          "end": "\\)",
+          "endCaptures": { "0": { "name": "punctuation.section.parens.end.l2" } },
+          "patterns": [
+            { "include": "#comments" },
+            { "match": "\\b([A-Z]\\w*)\\s*(=)", "captures": { "1": { "name": "variable.parameter.option.l2" }, "2": { "name": "keyword.operator.assignment.l2" } } },
+            { "match": "\\b(true|false)\\b", "name": "constant.language.boolean.l2" },
+            { "include": "#numbers" },
+            { "match": "\\b\\w+\\b", "name": "constant.language.directive-value.l2" }
+          ]
+        },
+        {
+          "name": "storage.type.annotation.l2",
+          "match": "@[A-Za-z_]\\w*"
+        }
+      ]
+    },
+    "escapes": {
+      "patterns": [
+        { "name": "constant.character.escape.unicode.l2", "match": "\\\\u\\{[0-9A-Fa-f]+\\}" },
+        { "name": "constant.character.escape.l2", "match": "\\\\[ntr0\\\\\"'{}%]" },
+        { "name": "invalid.illegal.escape.l2", "match": "\\\\." }
+      ]
+    },
+    "placeholders": {
+      "comment": "\"Hello %str%\".format(name)",
+      "name": "constant.other.placeholder.l2",
+      "match": "%[A-Za-z_]\\w*%"
+    },
+    "strings": {
+      "name": "string.quoted.double.l2",
+      "begin": "\"",
+      "end": "\"|$",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.l2" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.l2" } },
+      "patterns": [{ "include": "#escapes" }, { "include": "#placeholders" }]
+    },
+    "fstrings": {
+      "name": "string.interpolated.l2",
+      "begin": "(f)(\")",
+      "end": "\"|$",
+      "beginCaptures": {
+        "1": { "name": "storage.type.string.l2" },
+        "2": { "name": "punctuation.definition.string.begin.l2" }
+      },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.l2" } },
+      "patterns": [
+        { "include": "#escapes" },
+        { "name": "constant.character.escape.brace.l2", "match": "\\{\\{|\\}\\}" },
+        {
+          "name": "meta.interpolation.l2",
+          "contentName": "meta.embedded.expression.l2",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.l2" } },
+          "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.l2" } },
+          "patterns": [{ "include": "#braced" }, { "include": "#code" }]
+        },
+        { "include": "#placeholders" }
+      ]
+    },
+    "braced": {
+      "comment": "nested braces inside an interpolation (e.g. a dictionary literal)",
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [{ "include": "#braced" }, { "include": "#code" }]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.l2", "match": "\\b0[xX][0-9A-Fa-f_]+\\b" },
+        { "name": "constant.numeric.binary.l2", "match": "\\b0[bB][01_]+\\b" },
+        { "name": "constant.numeric.octal.l2", "match": "\\b0[oO][0-7_]+\\b" },
+        { "name": "constant.numeric.float.l2", "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+)\\b" },
+        { "name": "constant.numeric.integer.l2", "match": "\\b[0-9][0-9_]*\\b" }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(class|interface)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": { "name": "storage.type.$1.l2" },
+            "2": { "name": "entity.name.type.class.l2" }
+          }
+        },
+        {
+          "match": "\\b(extends|implements)\\s+([A-Za-z_]\\w*)",
+          "captures": {
+            "1": { "name": "storage.modifier.$1.l2" },
+            "2": { "name": "entity.other.inherited-class.l2" }
+          }
+        },
+        {
+          "comment": "using a.b.c as alias",
+          "match": "\\b(using)\\s+([A-Za-z_][\\w.]*)(?:\\s+(as)\\s+([A-Za-z_]\\w*))?",
+          "captures": {
+            "1": { "name": "keyword.control.import.l2" },
+            "2": { "name": "entity.name.namespace.l2" },
+            "3": { "name": "keyword.control.import.l2" },
+            "4": { "name": "entity.name.namespace.alias.l2" }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.flow.l2", "match": "\\b(return|break|continue|fallthrough|throw)\\b" },
+        { "name": "keyword.control.conditional.l2", "match": "\\b(if|else|switch|case|default)\\b" },
+        { "name": "keyword.control.loop.l2", "match": "\\b(for|in)\\b" },
+        { "name": "keyword.control.exception.l2", "match": "\\b(try|catch|finally)\\b" },
+        { "name": "keyword.control.import.l2", "match": "\\b(using|as)\\b" },
+        { "name": "keyword.operator.logical.l2", "match": "\\b(and|or|not)\\b" },
+        { "name": "storage.type.function.l2", "match": "\\bfunction\\b" },
+        { "name": "storage.type.class.l2", "match": "\\b(class|interface)\\b" },
+        { "name": "storage.modifier.l2", "match": "\\b(public|private|protected|static|Immutable|copied|extends|implements|throws|move)\\b" },
+        { "name": "storage.modifier.accessor.l2", "match": "\\b(getter|setter(?:\\.(?:chain|nochain))?)\\b" },
+        { "name": "constant.language.boolean.l2", "match": "\\b(true|false)\\b" },
+        { "name": "constant.language.null.l2", "match": "\\b(null|Null)\\b" },
+        { "name": "variable.language.l2", "match": "\\b(this|super)\\b" },
+        { "name": "support.constant.l2", "match": "\\b(MAX|MIN)\\b" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "storage.type.primitive.l2", "match": "\\b(void|Boolean|Byte|Int|Int8|Int16|Int32|Int64|IntLarge|UInt|UInt8|UInt16|UInt32|UInt64|Float|Float16|Float32|Float64)\\b" },
+        { "name": "support.type.l2", "match": "\\b(String|Dictionary|Function|DTVariable|STVariable|Droppable|Comparable|List)\\b" },
+        { "name": "support.class.exception.l2", "match": "\\b(Throwable|Error|Exception|RuntimeException|IOException|NullPointerException|ArithmeticException|ClassCastException|IndexOutOfBoundsException|IllegalArgumentException)\\b" },
+        { "name": "entity.name.type.l2", "match": "\\b[A-Z]\\w*\\b" }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "comment": "name( or name[T](  — calls and declarations",
+          "match": "\\b([a-z_]\\w*)\\s*(?=\\(|\\[[A-Z][\\w\\s,?]*\\]\\s*\\()",
+          "captures": { "1": { "name": "entity.name.function.l2" } }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.arrow.l2", "match": "->" },
+        { "name": "keyword.operator.reference.l2", "match": "&(?=[A-Za-z_\\[])" },
+        { "name": "keyword.operator.null-coalescing.l2", "match": "\\?\\?" },
+        { "name": "keyword.operator.assignment.compound.l2", "match": "\\*\\*=|[+\\-*/%]=" },
+        { "name": "keyword.operator.comparison.l2", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.arithmetic.l2", "match": "\\*\\*|[+\\-*/%]" },
+        { "name": "keyword.operator.bitwise.l2", "match": "<<|>>|&&|\\|\\||[&|^~]" },
+        { "name": "keyword.operator.assignment.l2", "match": "=" },
+        { "name": "keyword.operator.logical.l2", "match": "!" },
+        { "name": "keyword.operator.ternary.l2", "match": "[?:]" },
+        { "name": "punctuation.terminator.l2", "match": ";" },
+        { "name": "punctuation.separator.comma.l2", "match": "," },
+        { "name": "punctuation.accessor.l2", "match": "\\." }
+      ]
+    }
+  }
+}

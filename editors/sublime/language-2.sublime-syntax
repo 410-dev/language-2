@@ -1,0 +1,286 @@
+%YAML 1.2
+---
+# Syntax highlighting for language-2 (.l2). See SPEC.md and crates/l2/src/lexer.rs.
+name: language-2
+scope: source.l2
+version: 2
+file_extensions:
+  - l2
+
+variables:
+  ident: '[A-Za-z_]\w*'
+  primitive: '\b(?:void|Boolean|Byte|Int|Int8|Int16|Int32|Int64|IntLarge|UInt|UInt8|UInt16|UInt32|UInt64|Float|Float16|Float32|Float64)\b'
+  builtin_type: '\b(?:String|Dictionary|Function|DTVariable|STVariable|Droppable|Comparable|List)\b'
+  exception: '\b(?:Throwable|Error|Exception|RuntimeException|IOException|NullPointerException|ArithmeticException|ClassCastException|IndexOutOfBoundsException|IllegalArgumentException)\b'
+
+contexts:
+  main:
+    - include: code
+
+  code:
+    - include: comments
+    - include: annotations
+    - include: fstrings
+    - include: strings
+    - include: numbers
+    - include: declarations
+    - include: keywords
+    - include: types
+    - include: functions
+    - include: braces
+    - include: operators
+
+  # --- comments ---------------------------------------------------------
+
+  comments:
+    - match: '/\*\*(?!/)'
+      scope: punctuation.definition.comment.begin.l2
+      push: doc_comment
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.l2
+      push: block_comment
+    - match: '//'
+      scope: punctuation.definition.comment.l2
+      push: line_comment
+
+  doc_comment:
+    - meta_scope: comment.block.documentation.l2
+    - match: '\*\*?/'
+      scope: punctuation.definition.comment.end.l2
+      pop: true
+
+  block_comment:
+    - meta_scope: comment.block.l2
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.l2
+      pop: true
+
+  line_comment:
+    - meta_scope: comment.line.double-slash.l2
+    - match: '$\n?'
+      pop: true
+
+  # --- directives and annotations ----------------------------------------
+
+  annotations:
+    # @using sdk 1 / @runtime compiler interpreter bytecode
+    - match: '^\s*(@(?:using|runtime))\b'
+      captures:
+        1: keyword.other.directive.l2
+      push: directive_line
+    # @compiler( ... ) / @runtimecfg( ... )
+    - match: '(@(?:compiler|runtimecfg))\s*(\()'
+      captures:
+        1: keyword.other.directive.l2
+        2: punctuation.section.parens.begin.l2
+      push: directive_options
+    - match: '@{{ident}}'
+      scope: storage.type.annotation.l2
+
+  directive_line:
+    - match: '$'
+      pop: true
+    - include: comments
+    - include: numbers
+    - match: '\b\w+\b'
+      scope: constant.language.directive-value.l2
+
+  directive_options:
+    - match: '\)'
+      scope: punctuation.section.parens.end.l2
+      pop: true
+    - include: comments
+    - match: '\b([A-Z]\w*)\s*(=)'
+      captures:
+        1: variable.parameter.option.l2
+        2: keyword.operator.assignment.l2
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.l2
+    - include: numbers
+    - match: '\b\w+\b'
+      scope: constant.language.directive-value.l2
+
+  # --- strings -----------------------------------------------------------
+
+  escapes:
+    - match: '\\u\{[0-9A-Fa-f]+\}'
+      scope: constant.character.escape.unicode.l2
+    - match: '\\[ntr0\\"''{}%]'
+      scope: constant.character.escape.l2
+    - match: '\\.'
+      scope: invalid.illegal.escape.l2
+
+  placeholders:
+    # "Hello %str%".format(name)
+    - match: '%{{ident}}%'
+      scope: constant.other.placeholder.l2
+
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.l2
+      push: string_body
+
+  string_body:
+    - meta_scope: string.quoted.double.l2
+    - match: '"'
+      scope: punctuation.definition.string.end.l2
+      pop: true
+    - match: '\n'
+      scope: invalid.illegal.unterminated-string.l2
+      pop: true
+    - include: escapes
+    - include: placeholders
+
+  fstrings:
+    - match: '(f)(")'
+      captures:
+        1: storage.type.string.l2
+        2: punctuation.definition.string.begin.l2
+      push: fstring_body
+
+  fstring_body:
+    - meta_scope: string.interpolated.l2
+    - match: '"'
+      scope: punctuation.definition.string.end.l2
+      pop: true
+    - match: '\n'
+      scope: invalid.illegal.unterminated-string.l2
+      pop: true
+    - include: escapes
+    - match: '\{\{|\}\}'
+      scope: constant.character.escape.brace.l2
+    - match: '\{'
+      scope: punctuation.section.interpolation.begin.l2
+      push: interpolation
+    - include: placeholders
+
+  interpolation:
+    - clear_scopes: 1
+    - meta_scope: meta.interpolation.l2
+    - match: '\}'
+      scope: punctuation.section.interpolation.end.l2
+      pop: true
+    - include: code
+
+  # --- numbers -----------------------------------------------------------
+
+  numbers:
+    - match: '\b0[xX][0-9A-Fa-f_]+\b'
+      scope: constant.numeric.hex.l2
+    - match: '\b0[bB][01_]+\b'
+      scope: constant.numeric.binary.l2
+    - match: '\b0[oO][0-7_]+\b'
+      scope: constant.numeric.octal.l2
+    - match: '\b[0-9][0-9_]*(?:\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+)\b'
+      scope: constant.numeric.float.l2
+    - match: '\b[0-9][0-9_]*\b'
+      scope: constant.numeric.integer.l2
+
+  # --- declarations and keywords -----------------------------------------
+
+  declarations:
+    - match: '\b(class|interface)\s+({{ident}})'
+      captures:
+        1: storage.type.class.l2
+        2: entity.name.class.l2
+    - match: '\b(extends|implements)\s+({{ident}})'
+      captures:
+        1: storage.modifier.l2
+        2: entity.other.inherited-class.l2
+    # using a.b.c as alias
+    - match: '\b(using)\s+({{ident}}(?:\.{{ident}})*)(?:\s+(as)\s+({{ident}}))?'
+      captures:
+        1: keyword.control.import.l2
+        2: entity.name.namespace.l2
+        3: keyword.control.import.l2
+        4: entity.name.namespace.l2
+
+  keywords:
+    - match: '\b(?:return|break|continue|fallthrough|throw)\b'
+      scope: keyword.control.flow.l2
+    - match: '\b(?:if|else|switch|case|default)\b'
+      scope: keyword.control.conditional.l2
+    - match: '\b(?:for|in)\b'
+      scope: keyword.control.loop.l2
+    - match: '\b(?:try|catch|finally)\b'
+      scope: keyword.control.exception.l2
+    - match: '\b(?:using|as)\b'
+      scope: keyword.control.import.l2
+    - match: '\b(?:and|or|not)\b'
+      scope: keyword.operator.logical.l2
+    - match: '\bfunction\b'
+      scope: storage.type.function.l2
+    - match: '\b(?:class|interface)\b'
+      scope: storage.type.class.l2
+    - match: '\b(?:public|private|protected|static|Immutable|copied|extends|implements|throws|move)\b'
+      scope: storage.modifier.l2
+    - match: '\b(?:getter|setter(?:\.(?:chain|nochain))?)\b'
+      scope: storage.modifier.accessor.l2
+    - match: '\b(?:true|false)\b'
+      scope: constant.language.boolean.l2
+    - match: '\b(?:null|Null)\b'
+      scope: constant.language.null.l2
+    - match: '\b(?:this|super)\b'
+      scope: variable.language.l2
+    - match: '\b(?:MAX|MIN)\b'
+      scope: support.constant.l2
+
+  types:
+    - match: '{{primitive}}'
+      scope: storage.type.primitive.l2
+    - match: '{{builtin_type}}'
+      scope: support.type.l2
+    - match: '{{exception}}'
+      scope: support.class.exception.l2
+    - match: '\b[A-Z]\w*\b'
+      scope: entity.name.type.l2
+
+  functions:
+    # name( or name[T](  — calls and declarations
+    - match: '\b([a-z_]\w*)\s*(?=\(|\[[A-Z][\w\s,?]*\]\s*\()'
+      captures:
+        1: entity.name.function.l2
+
+  braces:
+    # keeps f-string interpolations balanced around dictionary literals and blocks
+    - match: '\{'
+      scope: punctuation.section.block.begin.l2
+      push: braced
+    - match: '\}'
+      scope: invalid.illegal.stray-brace.l2
+
+  braced:
+    - match: '\}'
+      scope: punctuation.section.block.end.l2
+      pop: true
+    - include: code
+
+  # --- operators ---------------------------------------------------------
+
+  operators:
+    - match: '->'
+      scope: keyword.operator.arrow.l2
+    - match: '&(?=[A-Za-z_\[])'
+      scope: keyword.operator.reference.l2
+    - match: '\?\?'
+      scope: keyword.operator.null-coalescing.l2
+    - match: '\*\*=|[-+*/%]='
+      scope: keyword.operator.assignment.compound.l2
+    - match: '==|!=|<=|>=|<|>'
+      scope: keyword.operator.comparison.l2
+    - match: '\*\*|[-+*/%]'
+      scope: keyword.operator.arithmetic.l2
+    - match: '<<|>>|&&|\|\||[&|^~]'
+      scope: keyword.operator.bitwise.l2
+    - match: '='
+      scope: keyword.operator.assignment.l2
+    - match: '!'
+      scope: keyword.operator.logical.l2
+    - match: '[?:]'
+      scope: keyword.operator.ternary.l2
+    - match: ';'
+      scope: punctuation.terminator.l2
+    - match: ','
+      scope: punctuation.separator.comma.l2
+    - match: '\.'
+      scope: punctuation.accessor.l2
