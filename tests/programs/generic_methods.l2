@@ -1,0 +1,57 @@
+@using sdk 1
+using stdio as stdio
+
+public class Mapper {
+    private String prefix = "#"
+
+    public function String tag[T](T value) {
+        return prefix + value
+    }
+
+    public static function T pick[T](Boolean first, T a, T b) {
+        return first ? a : b
+    }
+
+    public function Int64 count(?[] items) {
+        return items.length()
+    }
+}
+
+public class Store[K] {
+    private K[] keys
+
+    public Store() {
+        this.keys = K.array()
+    }
+
+    public function void add(K k) {
+        this.keys.insert(this.keys.length(), k)
+    }
+
+    public function V[] mapAll[V](Function[(&K), V] f) {
+        V[] out = V.array()
+        for (k in keys) {
+            out.insert(out.length(), f(k))
+        }
+        return out
+    }
+}
+
+function void main() {
+    Mapper m = Mapper()
+    stdio.println(m.tag(5))
+    stdio.println(m.tag("x"))
+    stdio.println(m.tag(2.5))
+    stdio.println(Mapper.pick(true, "left", "right"))
+    stdio.println(Mapper.pick(false, 1, 2))
+    Int64[] arr = Int64.array(length = 4, length_immutable = false)
+    stdio.println(m.count(arr))
+
+    Store[String] s = Store[String]()
+    s.add("apple")
+    s.add("kiwi")
+    Int64[] lengths = s.mapAll((&String k) -> k.length())
+    stdio.println(lengths)
+    String[] upper = s.mapAll((&String k) -> k.toUpperCase())
+    stdio.println(upper)
+}

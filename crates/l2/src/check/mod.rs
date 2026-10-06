@@ -68,6 +68,8 @@ pub struct MethodInfo {
     pub is_default: bool,
     pub overrides: bool,
     pub span: Span,
+    /// Generic method template: index into the owner class's `generic_decls`.
+    pub generic: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +100,7 @@ pub struct ClassMeta<'a> {
     pub fields: Vec<FieldMeta>,
     pub statics: HashMap<String, StaticMeta>,
     pub own_field_start: usize,
+    pub generic_decls: Vec<&'a ast::FuncDecl>,
 }
 
 pub struct IfaceMeta<'a> {
@@ -203,6 +206,7 @@ pub struct Checker<'a> {
     pub funcs: Vec<Func>,
     pub sigs: Vec<FuncSig>,
     pub func_inst: HashMap<(usize, Vec<Type>), FuncId>,
+    pub method_inst: HashMap<(usize, ClassId, Vec<Type>), FuncId>,
     pub selectors: Vec<Selector>,
     pub selector_map: HashMap<(String, Vec<Type>, Type), SelectorId>,
     pub globals: Vec<Global>,
@@ -239,6 +243,7 @@ pub fn check_program(files: &[ast::FileAst], module_names: &[String], entry: usi
         funcs: Vec::new(),
         sigs: Vec::new(),
         func_inst: HashMap::new(),
+        method_inst: HashMap::new(),
         selectors: Vec::new(),
         selector_map: HashMap::new(),
         globals: Vec::new(),
@@ -631,6 +636,45 @@ impl<'a> Checker<'a> {
         Some(fid)
     }
 
+    /// Instantiates a generic method of class `c` with concrete type arguments.
+    pub fn instantiate_method(&mut self, c: ClassId, gi: usize, targs: Vec<Type>, span: Span) -> Option<FuncId> {
+        let d = self.cmeta[c as usize].generic_decls[gi];
+        let key = (d as *const ast::FuncDecl as usize, c, targs.clone());
+        if let Some(&f) = self.method_inst.get(&key) {
+            return Some(f);
+        }
+        let module = self.cmeta[c as usize].module;
+        let tparams = generic_params(d);
+        if tparams.len() != targs.len() {
+            self.err(span, format!("'{}' expects {} type argument(s), got {}", d.name, tparams.len(), targs.len()));
+            return None;
+        }
+        let mut subst: Subst = (*self.cmeta[c as usize].subst).clone();
+        for ((name, bound), t) in tparams.iter().zip(targs.iter()) {
+            if let Some(b) = bound {
+                if !self.satisfies_bound(t, b, module, span) {
+                    let tn = self.tname(t);
+                    self.err(span, format!("type argument {} does not satisfy the bound of {}", tn, name));
+                }
+            }
+            subst.insert(name.clone(), t.clone());
+        }
+        let decl_params = wildcard_to_params(&d.params);
+        let (params, names) = self.param_types(&decl_params, module, &subst);
+        let ret = self.resolve_type(&d.ret, module, &subst);
+        let throws = self.resolve_throws(&d.throws, module, d.span);
+        let wrap = self.modules[module].wrap;
+        let tn: Vec<String> = targs.iter().map(|t| self.tname(t)).collect();
+        let cname = self.classes[c as usize].name.clone();
+        let is_static = d.mods.is_static;
+        let sig = FuncSig { name: d.name.clone(), params, param_names: names, ret, throws };
+        let kind = if is_static { FuncKind::Free } else { FuncKind::Method };
+        let fid = self.new_func(format!("{}.{}[{}]", cname, d.name, tn.join(", ")), kind, sig, wrap, if is_static { None } else { Some(c) }, d.span);
+        self.method_inst.insert(key, fid);
+        self.queue.push_back(Job { func: fid, kind: JobKind::Func(d), module, class: Some(c), iface: None, subst: Rc::new(subst), is_static });
+        Some(fid)
+    }
+
     pub fn satisfies_bound(&mut self, t: &Type, bound: &TypeExpr, module: usize, _span: Span) -> bool {
         if let TypeExpr::Named { name, args, .. } = bound {
             if name == "Comparable" && args.is_empty() {
@@ -869,6 +913,7 @@ impl<'a> Checker<'a> {
                 is_default: m.body.is_some(),
                 overrides: false,
                 span: m.span,
+                generic: None,
             });
         }
         self.imeta[id as usize].methods = methods;
@@ -939,6 +984,7 @@ impl<'a> Checker<'a> {
             fields: Vec::new(),
             statics: HashMap::new(),
             own_field_start: 0,
+            generic_decls: Vec::new(),
         });
         self.class_inst.insert(key, id);
         self.build_class(id, decl, module, subst);
@@ -1035,8 +1081,29 @@ impl<'a> Checker<'a> {
         // methods
         let mut methods: Vec<MethodInfo> = Vec::new();
         for m in &decl.methods {
-            if !m.type_params.is_empty() {
-                self.err(m.span, "generic methods are not supported yet; use a generic function or class");
+            if !m.type_params.is_empty() || has_wildcard(&m.params) {
+                // generic method: instantiated per type arguments at call sites (non-virtual)
+                if m.mods.annotations.iter().any(|a| a == "Override") {
+                    self.err(m.span, "generic methods cannot override (they are not virtual)");
+                }
+                let gi = self.cmeta[id as usize].generic_decls.len();
+                self.cmeta[id as usize].generic_decls.push(m);
+                methods.push(MethodInfo {
+                    name: m.name.clone(),
+                    func: None,
+                    params: Vec::new(),
+                    param_names: m.params.iter().map(|p| p.name.clone()).collect(),
+                    ret: Type::Void,
+                    throws: Vec::new(),
+                    is_static: m.mods.is_static,
+                    access: m.mods.access,
+                    selector: None,
+                    owner: Owner::Class(id),
+                    is_default: false,
+                    overrides: false,
+                    span: m.span,
+                    generic: Some(gi),
+                });
                 continue;
             }
             let (params, names) = self.param_types(&m.params, module, &subst);
@@ -1072,6 +1139,7 @@ impl<'a> Checker<'a> {
                 is_default: false,
                 overrides,
                 span: m.span,
+                generic: None,
             });
             if let Some(origin) = &m.delegate {
                 // `= origin Iface`: forward to that interface's default implementation
@@ -1131,6 +1199,7 @@ impl<'a> Checker<'a> {
                     is_default: false,
                     overrides: false,
                     span: f.span,
+                    generic: None,
                 });
                 self.queue.push_back(Job { func: fid, kind: JobKind::Getter(idx), module, class: Some(id), iface: None, subst: subst.clone(), is_static: false });
             }
@@ -1154,6 +1223,7 @@ impl<'a> Checker<'a> {
                     is_default: false,
                     overrides: false,
                     span: f.span,
+                    generic: None,
                 });
                 self.queue.push_back(Job { func: fid, kind: JobKind::Setter(idx, chain), module, class: Some(id), iface: None, subst: subst.clone(), is_static: false });
             }

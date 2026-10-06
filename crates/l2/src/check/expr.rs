@@ -1813,6 +1813,11 @@ impl<'a> Checker<'a> {
 
     /// Calls one of the given methods (overload set) on `recv` (None for static calls).
     pub fn invoke_methods(&mut self, ms: Vec<MethodInfo>, recv: Option<HExpr>, args: &'a [ast::Arg], span: Span, direct: bool) -> HExpr {
+        let (generic, ms): (Vec<MethodInfo>, Vec<MethodInfo>) = ms.into_iter().partition(|m| m.generic.is_some());
+        let concrete_fits = ms.iter().any(|m| m.params.len() == args.len());
+        if !generic.is_empty() && (ms.is_empty() || !concrete_fits) {
+            return self.invoke_generic_method(generic, recv, args, span);
+        }
         let cands = self.method_cands(&ms);
         let what = format!("method '{}'", ms[0].name);
         let Some((i, out)) = self.select_overload(&cands, args, span, &what) else {
@@ -1846,6 +1851,63 @@ impl<'a> Checker<'a> {
                 }
             },
         }
+    }
+
+    fn invoke_generic_method(&mut self, gs: Vec<MethodInfo>, recv: Option<HExpr>, args: &'a [ast::Arg], span: Span) -> HExpr {
+        if gs.len() > 1 {
+            self.err(span, format!("overloaded generic methods '{}' are not supported", gs[0].name));
+            return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
+        }
+        let m = &gs[0];
+        let Owner::Class(c) = m.owner else { unreachable!() };
+        let gi = m.generic.unwrap();
+        let (access, mname) = (m.access, m.name.clone());
+        self.check_access(access, c, span, &mname);
+        let d = self.cmeta[c as usize].generic_decls[gi];
+        let tparams = generic_params(d);
+        let names: Vec<String> = tparams.iter().map(|t| t.0.clone()).collect();
+        let decl_params = wildcard_to_params(&d.params);
+        if decl_params.len() != args.len() {
+            self.err(span, format!("method '{}' takes {} argument(s) but {} were given", d.name, decl_params.len(), args.len()));
+            return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
+        }
+        let mut bind = Subst::new();
+        let mut pre = Vec::new();
+        for (a, p) in args.iter().zip(decl_params.iter()) {
+            let x = self.arg_expr(&a.value);
+            self.unify(&p.ty, &x.ty, &names, &mut bind);
+            pre.push(x);
+        }
+        let mut targs = Vec::new();
+        for n in &names {
+            match bind.get(n) {
+                Some(t) => targs.push(t.clone()),
+                None => {
+                    self.err(span, format!("cannot infer type argument '{}' of method '{}'", n, d.name));
+                    return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
+                }
+            }
+        }
+        let Some(fid) = self.instantiate_method(c, gi, targs, span) else {
+            return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
+        };
+        let sig = self.sigs[fid as usize].clone();
+        let mut out = Vec::new();
+        if !d.mods.is_static {
+            match recv {
+                Some(r) => out.push(r),
+                None => {
+                    self.err(span, format!("instance method '{}' cannot be called from a static context", d.name));
+                    return HExpr::new(H::Lit(Lit::Null), sig.ret.clone(), span);
+                }
+            }
+        }
+        for (x, p) in pre.into_iter().zip(sig.params.iter()) {
+            let sp = x.span;
+            out.push(self.pass_arg(x, p, sp));
+        }
+        self.note_throws(&sig.throws, span);
+        HExpr::new(H::Call(fid, out), sig.ret, span)
     }
 
     fn call_member(&mut self, obj: &'a ast::Expr, name: &str, args: &'a [ast::Arg], expected: Option<&Type>, span: Span) -> HExpr {
