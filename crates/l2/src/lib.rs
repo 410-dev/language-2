@@ -14,6 +14,8 @@ pub mod hir_visit;
 pub mod interp;
 pub mod bytecode;
 pub mod vm;
+pub mod llvm;
+pub mod native;
 pub mod lexer;
 pub mod parser;
 pub mod types;

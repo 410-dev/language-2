@@ -201,7 +201,7 @@ pub struct Checker<'a> {
     pub sigs: Vec<FuncSig>,
     pub func_inst: HashMap<(usize, Vec<Type>), FuncId>,
     pub selectors: Vec<Selector>,
-    pub selector_map: HashMap<(String, Vec<Type>), SelectorId>,
+    pub selector_map: HashMap<(String, Vec<Type>, Type), SelectorId>,
     pub globals: Vec<Global>,
     /// static initialisers: (global, module, class, initializer expression)
     pub global_inits: Vec<(GlobalId, usize, ClassId, &'a ast::Expr, bool)>,
@@ -491,7 +491,7 @@ impl<'a> Checker<'a> {
 
     // ------------------------------------------------------------------ selectors and functions
     pub fn selector(&mut self, name: &str, params: &[Type], ret: &Type) -> SelectorId {
-        let key = (name.to_string(), params.to_vec());
+        let key = (name.to_string(), params.to_vec(), ret.clone());
         if let Some(&s) = self.selector_map.get(&key) {
             return s;
         }
@@ -1155,6 +1155,19 @@ impl<'a> Checker<'a> {
                 self.queue.push_back(Job { func: fid, kind: JobKind::Setter(idx, chain), module, class: Some(id), iface: None, subst: subst.clone(), is_static: false });
             }
         }
+        // an inherited method with the same parameters must keep its return type
+        for m in &methods {
+            if m.is_static || m.selector.is_none() {
+                continue;
+            }
+            let clash = vtable.keys().chain(ifaces.iter().flat_map(|i| self.imeta[*i as usize].methods.iter().filter_map(|im| im.selector.as_ref()))).any(|s| {
+                let sel = &self.selectors[*s as usize];
+                sel.name == m.name && sel.params == m.params && sel.ret != m.ret
+            });
+            if clash {
+                self.err(m.span, format!("method '{}' overrides a method with a different return type", m.name));
+            }
+        }
         // vtable: own instance methods override inherited entries
         for m in &methods {
             if let (Some(sel), Some(f)) = (m.selector, m.func) {
@@ -1249,7 +1262,7 @@ impl<'a> Checker<'a> {
             match (m.name.as_str(), m.params.len()) {
                 ("equals", 1) if m.ret == Type::Bool => self.classes[id as usize].equals_fn = m.func,
                 ("toString", 0) if m.ret == Type::Str => self.classes[id as usize].to_string_fn = m.func,
-                ("compareTo", 1) if matches!(m.ret, Type::Int(_)) => self.classes[id as usize].compare_fn = m.func,
+                ("compareTo", 1) if m.ret == Type::int32() => self.classes[id as usize].compare_fn = m.func,
                 _ => {}
             }
         }
@@ -1466,7 +1479,7 @@ impl<'a> Checker<'a> {
             self.classes[i].needs_drop = self.classes[i].drop_fn.is_some();
         }
         let any_droppable = self.classes.iter().any(|c| c.needs_drop);
-        let drop_selector = self.selector_map.get(&("drop".to_string(), vec![])).copied();
+        let drop_selector = self.selector_map.get(&("drop".to_string(), vec![], Type::Void)).copied();
         let mut p = Program {
             classes: std::mem::take(&mut self.classes),
             ifaces: std::mem::take(&mut self.ifaces),
