@@ -1,0 +1,5 @@
+// error: 'frozen' is Immutable
+function void main() {
+    Immutable Int64[] frozen = Int64.array(length = 2, length_immutable = true)
+    frozen[0] = 5
+}

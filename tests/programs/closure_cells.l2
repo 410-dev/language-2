@@ -1,0 +1,14 @@
+@using sdk 1
+using stdio as stdio
+
+function void main() {
+    Function[(), Int64][] fs = Function[(), Int64].array()
+    for (Int64 i = 0; i < 3; i += 1) {
+        Int64 v = i * 10
+        fs.insert(fs.length(), () -> v)
+        v += 1
+    }
+    for (f in fs) {
+        stdio.println(f())
+    }
+}

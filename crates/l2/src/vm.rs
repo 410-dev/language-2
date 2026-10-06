@@ -279,6 +279,10 @@ impl<'p> Vm<'p> {
                     }
                     set_local(c, locals, id, v);
                 }
+                Op::InitLocal(id) => {
+                    let v = pop!();
+                    locals[id as usize] = if c.cells[id as usize] { cell(v) } else { v };
+                }
                 Op::MoveLocal(id) => {
                     let v = take_local(c, locals, id);
                     stack.push(v);

@@ -16,6 +16,8 @@ pub enum Op {
     /// Load a local, bypassing cell indirection (the raw `Ref` for `*T` locals).
     LoadLocalRaw(u32),
     StoreLocal(u32, bool),
+    /// Declaration: like StoreLocal, but cell locals get a fresh cell.
+    InitLocal(u32),
     MoveLocal(u32),
     /// Push a reference to a local's storage (cells).
     LocalRef(u32),
@@ -164,7 +166,7 @@ fn compile_func(p: &Program, f: &Func) -> Chunk {
 fn effect(op: &Op) -> (u32, u32) {
     match *op {
         Op::Const(_) | Op::Dup | Op::LoadLocal(_) | Op::LoadLocalRaw(_) | Op::MoveLocal(_) | Op::LocalRef(_) | Op::LoadGlobal(_) | Op::GlobalRef(_) | Op::FuncRef(_) => (0, 1),
-        Op::Pop | Op::StoreLocal(..) | Op::StoreGlobal(..) | Op::StoreDeref(..) | Op::JumpIfFalse(_) | Op::JumpIfTrue(_) | Op::DropTop | Op::Free | Op::Return | Op::Throw => (1, 0),
+        Op::Pop | Op::StoreLocal(..) | Op::InitLocal(_) | Op::StoreGlobal(..) | Op::StoreDeref(..) | Op::JumpIfFalse(_) | Op::JumpIfTrue(_) | Op::DropTop | Op::Free | Op::Return | Op::Throw => (1, 0),
         Op::SetField(..) | Op::StoreRef(_) => (2, 0),
         Op::ElemRef => (2, 1),
         Op::GetField(_) | Op::FieldRef(_) | Op::Deref | Op::TupleGet(_) | Op::Neg(_) | Op::BitNot | Op::Not | Op::NonNull(_) | Op::Convert(_) | Op::Cast(..) => (1, 1),
@@ -334,7 +336,7 @@ impl<'h> FnCompiler<'h> {
                         self.emit(Op::Const(k));
                     }
                 }
-                self.emit(Op::StoreLocal(*id, false));
+                self.emit(Op::InitLocal(*id));
             }
             StmtKind::Assign(place, e) => {
                 let d = self.needs_drop(&e.ty);

@@ -1,0 +1,6 @@
+// error: cannot assign: 'x' is a read-only reference
+function void f(&Int64 x) {
+    x = 5
+}
+function void main() {
+}

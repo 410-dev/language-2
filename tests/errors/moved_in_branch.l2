@@ -1,0 +1,10 @@
+// error: use of moved value 's'
+using stdio as stdio
+function void take(String s) {}
+function void main() {
+    String s = "x"
+    if (s.length() > 0) {
+        take(s)
+    }
+    stdio.println(s)
+}

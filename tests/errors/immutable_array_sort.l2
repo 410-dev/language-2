@@ -1,0 +1,5 @@
+// error: cannot call mutating method 'sort'
+function void main() {
+    Immutable Int64[] frozen = Int64.array(length = 2, length_immutable = true)
+    frozen.sort()
+}

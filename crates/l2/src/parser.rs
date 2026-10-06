@@ -1185,6 +1185,10 @@ impl Parser {
                     return self.lambda(false);
                 }
                 self.bump();
+                if self.eat(&Tok::RParen) {
+                    // `()` as an empty parameter list in a type argument: Function[(), T]
+                    return Ok(Expr::new(ExprKind::TypeLit(TypeExpr::Tuple(Vec::new())), span));
+                }
                 let first = self.expr()?;
                 if self.at(&Tok::Comma) {
                     let mut items = vec![first];
