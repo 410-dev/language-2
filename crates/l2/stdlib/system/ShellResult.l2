@@ -1,0 +1,35 @@
+@using sdk 1
+
+// system.ShellResult: the exit code and captured output of a finished command (spec 14.6).
+
+public class ShellResult {
+    private Immutable Int64 code
+    private Immutable String out
+    private Immutable String err
+
+    public ShellResult(Int64 exitCode, &String stdout, &String stderr) {
+        this.code = exitCode
+        this.out = stdout.clone()
+        this.err = stderr.clone()
+    }
+
+    public function Int64 exitCode() {
+        return code
+    }
+
+    public function String stdout() {
+        return out.clone()
+    }
+
+    public function String stderr() {
+        return err.clone()
+    }
+
+    public function Boolean isSuccess() {
+        return code == 0
+    }
+
+    public function String toString() {
+        return f"ShellResult(exitCode={code}, stdout={out.length()} chars, stderr={err.length()} chars)"
+    }
+}

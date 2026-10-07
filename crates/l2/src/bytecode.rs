@@ -681,8 +681,15 @@ impl<'h> FnCompiler<'h> {
                 self.emit(Op::Arith(*op, *wrap));
             }
             ExprKind::Concat(parts) => {
-                let n = self.args(parts);
-                self.emit(Op::Concat(n));
+                // mutable values are displayed as soon as they are evaluated, so later parts
+                // that change them do not affect earlier ones (same order as the other backends)
+                for x in parts {
+                    self.expr(x);
+                    if !matches!(x.ty.deref(), Type::Str | Type::Int(_) | Type::Float(_) | Type::Bool | Type::Big) {
+                        self.emit(Op::Builtin(Builtin::ToString, 1));
+                    }
+                }
+                self.emit(Op::Concat(parts.len() as u32));
             }
             ExprKind::Cmp(op, a, b) => {
                 self.expr(a);

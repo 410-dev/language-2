@@ -1,0 +1,259 @@
+@using sdk 1
+
+// system.PlatformTask: one task described per operating system - a command or an action for
+// Windows, macOS and Linux, and a fallback for other systems (spec 14.6).
+//
+//     PlatformTask t = new PlatformTask()
+//         .description("list files")
+//         .windows(["cmd", "/c", "dir"])
+//         .mac(["ls", "-l"])
+//         .linux(["ls", "-l"])
+//         .otherOS((&Platform p) -> { p.shell(["ls"]) })
+//         .execute()
+//     t.wait()
+//     stdio.println(t.stdout())
+//
+// Commands are argument lists run without a shell (windowsPowerShell runs its arguments as one
+// PowerShell command). execute() starts the command and returns at once; wait(), exitCode(),
+// stdout() and stderr() wait for it to finish. Actions (lambdas) run inside execute().
+
+using intrinsics as intr
+
+public class PlatformTask {
+    private String? taskDescription
+    private String? taskId
+    private String[]? windowsCommand
+    private String[]? powerShellCommand
+    private String[]? macCommand
+    private String[]? linuxCommand
+    private Function[(), void]? windowsAction
+    private Function[(), void]? macAction
+    private Function[(), void]? linuxAction
+    private Function[(&Platform), void]? otherAction
+    private Boolean echo = false
+    private Boolean started = false
+    private Boolean finished = false
+    private DTVariable process
+    private Int64 code = 0
+    private String out = ""
+    private String err = ""
+
+    public PlatformTask() {
+        this.process = null
+    }
+
+    // ------------------------------------------------------------------ description
+    public function *PlatformTask description(&String text) {
+        this.taskDescription = text.clone()
+        return this
+    }
+
+    public function String? description() {
+        return taskDescription == null ? null : taskDescription!.clone()
+    }
+
+    public function *PlatformTask id(&String id) {
+        this.taskId = id.clone()
+        return this
+    }
+
+    public function String? id() {
+        return taskId == null ? null : taskId!.clone()
+    }
+
+    // ------------------------------------------------------------------ per-platform work
+    // A program and its arguments for Windows (e.g. ["cmd", "/c", "dir"]).
+    public function *PlatformTask windows(&String[] command) {
+        if (powerShellCommand != null) {
+            throw IllegalStateException("windows() conflicts with windowsPowerShell(); set only one of them")
+        }
+        checkCommand(command, "windows")
+        this.windowsCommand = command.clone()
+        return this
+    }
+
+    // A PowerShell command for Windows; the words are joined and run by powershell -Command.
+    public function *PlatformTask windowsPowerShell(&String[] command) {
+        if (windowsCommand != null or windowsAction != null) {
+            throw IllegalStateException("windowsPowerShell() conflicts with windows(); set only one of them")
+        }
+        checkCommand(command, "windowsPowerShell")
+        this.powerShellCommand = command.clone()
+        return this
+    }
+
+    public function *PlatformTask mac(&String[] command) {
+        checkCommand(command, "mac")
+        this.macCommand = command.clone()
+        return this
+    }
+
+    public function *PlatformTask linux(&String[] command) {
+        checkCommand(command, "linux")
+        this.linuxCommand = command.clone()
+        return this
+    }
+
+    public function *PlatformTask windows(Function[(), void] action) {
+        if (powerShellCommand != null) {
+            throw IllegalStateException("windows() conflicts with windowsPowerShell(); set only one of them")
+        }
+        this.windowsAction = action
+        return this
+    }
+
+    public function *PlatformTask mac(Function[(), void] action) {
+        this.macAction = action
+        return this
+    }
+
+    public function *PlatformTask linux(Function[(), void] action) {
+        this.linuxAction = action
+        return this
+    }
+
+    // Runs on any other system (and on Windows / macOS / Linux when nothing was given for
+    // them). Commands run with p.shell(...) become the task's result.
+    public function *PlatformTask otherOS(Function[(&Platform), void] action) {
+        this.otherAction = action
+        return this
+    }
+
+    // Show the command's output while it runs (it is still captured).
+    public function *PlatformTask printToConsole(Boolean enabled) {
+        this.echo = enabled
+        return this
+    }
+
+    private static function void checkCommand(&String[] command, &String what) {
+        if (command.isEmpty()) {
+            throw IllegalArgumentException(f"{what}(): the command needs at least a program name")
+        }
+    }
+
+    // ------------------------------------------------------------------ running
+    // Starts the work for the current platform. Commands run in the background until wait();
+    // actions run now.
+    public function *PlatformTask execute() {
+        if (started) {
+            throw IllegalStateException("the task was already executed")
+        }
+        this.started = true
+        Platform p = new Platform()
+        String[]? command = null
+        // 1 = Windows action, 2 = macOS action, 3 = Linux action
+        Int64 action = 0
+        if (p.isWindows()) {
+            if (powerShellCommand != null) {
+                String[] ps = ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
+                ps.add(powerShellCommand!.join(" "))
+                command = ps
+            } else if (windowsCommand != null) {
+                command = windowsCommand!.clone()
+            } else if (windowsAction != null) {
+                action = 1
+            }
+        } else if (p.isMac()) {
+            if (macCommand != null) {
+                command = macCommand!.clone()
+            } else if (macAction != null) {
+                action = 2
+            }
+        } else if (p.isLinux()) {
+            if (linuxCommand != null) {
+                command = linuxCommand!.clone()
+            } else if (linuxAction != null) {
+                action = 3
+            }
+        }
+        if (command != null) {
+            this.process = intr.procSpawn(command!, null, echo, null)
+            return this
+        }
+        if (action != 0) {
+            switch (action as a) {
+                case a == 1:
+                    windowsAction!()
+                case a == 2:
+                    macAction!()
+                default:
+                    linuxAction!()
+            }
+            this.finished = true
+            return this
+        }
+        if (otherAction != null) {
+            otherAction!(&p)
+            ShellResult? r = p.lastResult()
+            if (r != null) {
+                this.code = r!.exitCode()
+                this.out = r!.stdout()
+                this.err = r!.stderr()
+            }
+            this.finished = true
+            return this
+        }
+        throw UnsupportedOperationException(f"task{label()} has nothing to run on {p.systemName}")
+    }
+
+    // Not available yet: needs the multithreading runtime.
+    public function *PlatformTask executePromise(&Promise promise) {
+        throw UnsupportedOperationException("PlatformTask.executePromise is not implemented yet (it needs multithreading); use execute() and wait()")
+    }
+
+    private function String label() {
+        if (taskId != null) {
+            return f" '{taskId!}'"
+        }
+        if (taskDescription != null) {
+            return f" '{taskDescription!}'"
+        }
+        return ""
+    }
+
+    // Waits until the command has finished.
+    public function *PlatformTask wait() {
+        if (!started) {
+            throw IllegalStateException(f"task{label()} was not executed")
+        }
+        if (!finished) {
+            c, o, e = intr.procWait(process)
+            this.code = c
+            this.out = o
+            this.err = e
+            this.finished = true
+        }
+        return this
+    }
+
+    public function Boolean isDone() {
+        return finished or (started and intr.procIsDone(process))
+    }
+
+    // Stops a running command.
+    public function void kill() {
+        if (started and !finished) {
+            intr.procKill(process)
+        }
+    }
+
+    public function Int64 exitCode() {
+        this.wait()
+        return code
+    }
+
+    public function String stdout() {
+        this.wait()
+        return out.clone()
+    }
+
+    public function String stderr() {
+        this.wait()
+        return err.clone()
+    }
+
+    public function String toString() {
+        String state = !started ? "not started" : (finished ? f"exit code {code}" : "running")
+        return f"PlatformTask{label()} ({state})"
+    }
+}

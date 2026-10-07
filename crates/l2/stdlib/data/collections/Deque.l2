@@ -1,0 +1,105 @@
+@using sdk 1
+
+// data.collections.Deque: a double-ended queue (spec 14.12). Adding and removing at either end
+// takes amortized constant time.
+
+public class Deque[T] {
+    // front values, the first one at the end
+    private T[] front
+    // back values, the last one at the end
+    private T[] back
+
+    public Deque() {
+        this.front = T.array()
+        this.back = T.array()
+    }
+
+    public function void pushFront(T value) {
+        front.add(value)
+    }
+
+    public function void pushBack(T value) {
+        back.add(value)
+    }
+
+    public function T popFront() {
+        if (front.isEmpty()) {
+            if (back.isEmpty()) {
+                throw IllegalStateException("popFront from an empty deque")
+            }
+            Deque[T].split(*back, *front)
+        }
+        return front.pop()
+    }
+
+    public function T popBack() {
+        if (back.isEmpty()) {
+            if (front.isEmpty()) {
+                throw IllegalStateException("popBack from an empty deque")
+            }
+            Deque[T].split(*front, *back)
+        }
+        return back.pop()
+    }
+
+    // moves the far half of `from` (its start) into the empty `to`, keeping the order
+    private static function void split(*T[] from, *T[] to) {
+        Int64 n = from.length()
+        Int64 k = (n + 1) / 2
+        T[] keep = T.array()
+        for (Int64 i = 0; i < n - k; i += 1) {
+            keep.add(from.pop())
+        }
+        for (Int64 i = 0; i < k; i += 1) {
+            to.add(from.pop())
+        }
+        for (; !keep.isEmpty();) {
+            from.add(keep.pop())
+        }
+    }
+
+    public function T peekFront() {
+        if (!front.isEmpty()) {
+            return front.last().clone()
+        }
+        if (back.isEmpty()) {
+            throw IllegalStateException("peekFront at an empty deque")
+        }
+        return back.first().clone()
+    }
+
+    public function T peekBack() {
+        if (!back.isEmpty()) {
+            return back.last().clone()
+        }
+        if (front.isEmpty()) {
+            throw IllegalStateException("peekBack at an empty deque")
+        }
+        return front.first().clone()
+    }
+
+    public function Int64 length() {
+        return front.length() + back.length()
+    }
+
+    public function Boolean isEmpty() {
+        return front.isEmpty() and back.isEmpty()
+    }
+
+    public function void clear() {
+        front.clear()
+        back.clear()
+    }
+
+    // front to back
+    public function T[] toArray() {
+        T[] out = front.clone()
+        out.reverse()
+        out.addAll(back)
+        return out
+    }
+
+    public function String toString() {
+        return f"Deque{toArray()}"
+    }
+}

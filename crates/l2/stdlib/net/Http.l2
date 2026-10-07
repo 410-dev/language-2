@@ -1,0 +1,102 @@
+@using sdk 1
+
+// net.Http / net.HttpResponse: an HTTP/1.1 client for http:// and https:// URLs (spec 14.9).
+// Redirects are followed (up to 5). Error statuses (404, 500, ...) are ordinary responses;
+// connection failures throw IOException (TimeoutException after the timeout).
+//
+//     HttpResponse r = Http.get("https://example.com/")
+//     stdio.println(f"{r.status()} {r.header("content-type")}")
+//     DTVariable data = Http.get("https://api.example.com/items").json()
+
+using intrinsics as intr
+
+public class HttpResponse {
+    private Immutable Int64 code
+    private Dictionary[String, String] headerMap
+    private Bytes content
+
+    public HttpResponse(Int64 status, &Dictionary[String, String] headers, Bytes body) {
+        this.code = status
+        this.headerMap = headers.clone()
+        this.content = body
+    }
+
+    public function Int64 status() {
+        return code
+    }
+
+    // 200..299
+    public function Boolean isSuccess() {
+        return code >= 200 and code < 300
+    }
+
+    // header names are lower case
+    public function Dictionary[String, String] headers() {
+        return headerMap.clone()
+    }
+
+    public function String? header(&String name) {
+        String key = name.toLowerCase()
+        if (headerMap.containsKey(key)) {
+            return headerMap.get(key).clone()
+        }
+        return null
+    }
+
+    public function Bytes body() {
+        return content.clone()
+    }
+
+    // the body as UTF-8 text
+    public function String text() {
+        return content.decode()
+    }
+
+    // the body parsed as JSON
+    public function DTVariable json() {
+        return intr.jsonParse(content.decode())
+    }
+
+    public function String toString() {
+        return f"HttpResponse({code}, {content.length()} bytes)"
+    }
+}
+
+public class Http {
+    // default timeout of the static helpers: 30 s
+    public static function Int64 defaultTimeoutMillis() {
+        return 30000
+    }
+
+    public static function HttpResponse get(&String url) {
+        Dictionary[String, String] h = {}
+        return Http.request("GET", url, h, new Bytes(), 30000)
+    }
+
+    public static function HttpResponse get(&String url, &Dictionary[String, String] headers) {
+        return Http.request("GET", url, headers, new Bytes(), 30000)
+    }
+
+    // a text body (Content-Type: text/plain; charset=utf-8 unless given)
+    public static function HttpResponse post(&String url, &String body) {
+        Dictionary[String, String] h = {"Content-Type": "text/plain; charset=utf-8"}
+        return Http.request("POST", url, h, body.encode(), 30000)
+    }
+
+    public static function HttpResponse post(&String url, &Bytes body, &String contentType) {
+        Dictionary[String, String] h = {"Content-Type": contentType.clone()}
+        return Http.request("POST", url, h, body.clone(), 30000)
+    }
+
+    // a JSON body built from dictionaries, arrays, strings, numbers and Booleans
+    public static function HttpResponse postJson(&String url, &DTVariable value) {
+        Dictionary[String, String] h = {"Content-Type": "application/json"}
+        return Http.request("POST", url, h, intr.jsonStringify(value, 0).encode(), 30000)
+    }
+
+    // any method; timeoutMillis 0 = no timeout
+    public static function HttpResponse request(&String method, &String url, &Dictionary[String, String] headers, Bytes body, Int64 timeoutMillis) {
+        status, hs, data = intr.httpRequest(method, url, headers, body.toArray(), timeoutMillis)
+        return new HttpResponse(status, hs, new Bytes(data))
+    }
+}

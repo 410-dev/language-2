@@ -16,6 +16,7 @@ pub mod bytecode;
 pub mod vm;
 pub mod llvm;
 pub mod native;
+pub mod sdk;
 pub mod lexer;
 pub mod parser;
 pub mod types;

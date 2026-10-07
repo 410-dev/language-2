@@ -36,6 +36,7 @@ builtins! {
     // arrays
     ArrNew, ArrLength, ArrIsEmpty, ArrAt, ArrFirst, ArrLast, ArrKv, ArrSet, ArrFill, ArrReverse,
     ArrSort, ArrShuffle, ArrInsert, ArrRemove, ArrContains,
+    ArrPush, ArrPop, ArrClear, ArrAddAll, ArrSlice, ArrIndexOf, ArrConcat, ArrJoin, ArrPermute, ArrSwap,
     // dictionaries
     DictGet, DictSet, DictKv, DictMerge, DictLength, DictIsEmpty, DictContainsKey, DictRemove,
     DictKeys, DictValues,
@@ -43,6 +44,8 @@ builtins! {
     NumRound, NumCeil, NumFloor, NumAbs, FormatValue, DefaultToString,
     // bulk numeric kernels (math.linear intrinsics)
     TensorZip, TensorScalar, TensorMatMul, TensorRound, TensorMigrate, TensorTranspose,
+    // standard library system services: args[0] is the operation (sys::SysOp)
+    Sys,
 }
 
 impl Builtin {
@@ -62,6 +65,12 @@ impl Builtin {
                 | ArrShuffle
                 | ArrInsert
                 | ArrRemove
+                | ArrPush
+                | ArrPop
+                | ArrClear
+                | ArrAddAll
+                | ArrPermute
+                | ArrSwap
                 | DictSet
                 | DictMerge
                 | DictRemove
@@ -591,14 +600,14 @@ pub fn call<H: Host>(b: Builtin, args: Vec<Value>, h: &mut H) -> Result<Value, H
                 return Err(h.throw(ExcKind::IllegalArgument, format!("negative array length {}", len)));
             }
             let fixed = args.get(2).map(|v| v.deref().as_bool()).unwrap_or(false);
-            Value::array(vec![def; len as usize], fixed)
+            Value::packed(Items::filled(&def.deref(), len as usize), fixed)
         }
         ArrLength => Value::i64(arr_arg(&args[0], h)?.items.len() as i64),
         ArrIsEmpty => Value::Bool(arr_arg(&args[0], h)?.items.is_empty()),
         ArrAt => {
             let a = arr_arg(&args[0], h)?;
             let i = norm_index(arg_int(&args, 1, 0), a.items.len(), h)?;
-            a.items[i].clone()
+            a.items.get(i)
         }
         ArrFirst | ArrLast => {
             let a = arr_arg(&args[0], h)?;
@@ -608,12 +617,12 @@ pub fn call<H: Host>(b: Builtin, args: Vec<Value>, h: &mut H) -> Result<Value, H
             }
             let idx = if b == ArrFirst { off } else { -1 - off };
             let i = norm_index(idx, a.items.len(), h)?;
-            a.items[i].clone()
+            a.items.get(i)
         }
         ArrKv => {
             let a = arr_arg(&args[0], h)?;
             Value::array(
-                a.items.iter().enumerate().map(|(i, v)| Value::Tuple(Rc::new(vec![Value::i64(i as i64), v.clone()]))).collect(),
+                a.items.iter().enumerate().map(|(i, v)| Value::Tuple(Rc::new(vec![Value::i64(i as i64), v]))).collect(),
                 false,
             )
         }
@@ -621,13 +630,56 @@ pub fn call<H: Host>(b: Builtin, args: Vec<Value>, h: &mut H) -> Result<Value, H
             let a = arr_arg(&args[0], h)?;
             let x = args[1].deref();
             let mut found = false;
-            for it in &a.items {
-                if values_equal(it, &x, h)? {
+            for it in a.items.iter() {
+                if values_equal(&it, &x, h)? {
                     found = true;
                     break;
                 }
             }
             Value::Bool(found)
+        }
+
+        ArrSlice => {
+            // [from, to): negative indices count from the end
+            let a = arr_arg(&args[0], h)?;
+            let len = a.items.len() as i128;
+            let fix = |i: i128| if i < 0 { i + len } else { i };
+            let (from, to) = (fix(arg_int(&args, 1, 0)), fix(arg_int(&args, 2, len)));
+            if from < 0 || to > len || from > to {
+                return Err(h.throw(ExcKind::IndexOutOfBounds, format!("slice [{}, {}) out of bounds for length {}", arg_int(&args, 1, 0), arg_int(&args, 2, len), len)));
+            }
+            let part = Value::packed(a.items.slice(from as usize, to as usize), false);
+            deep_clone(&part, h)?
+        }
+        ArrIndexOf => {
+            let a = arr_arg(&args[0], h)?;
+            let x = args[1].deref();
+            let last = args.get(2).map(|v| v.deref().as_bool()).unwrap_or(false);
+            let n = a.items.len();
+            let mut found = -1i64;
+            for k in 0..n {
+                let i = if last { n - 1 - k } else { k };
+                if values_equal(&a.items.get(i), &x, h)? {
+                    found = i as i64;
+                    break;
+                }
+            }
+            Value::i64(found)
+        }
+        ArrConcat => {
+            let (a, b) = (arr_arg(&args[0], h)?, arr_arg(&args[1], h)?);
+            let mut items = a.items.clone();
+            items.extend(&b.items);
+            deep_clone(&Value::packed(items, false), h)?
+        }
+        ArrJoin => {
+            let a = arr_arg(&args[0], h)?;
+            let sep = arg_str(&args, 1);
+            let mut parts = Vec::with_capacity(a.items.len());
+            for it in a.items.iter() {
+                parts.push(to_display(&it, h)?);
+            }
+            Value::str(parts.join(&sep))
         }
 
         // ---------------- dictionaries
@@ -712,6 +764,7 @@ pub fn call<H: Host>(b: Builtin, args: Vec<Value>, h: &mut H) -> Result<Value, H
             let dim = |i: usize| arg_int(&args, i, 0).max(0) as usize;
             numeric::transpose(&args[0], dim(1), dim(2), h)?
         }
+        Sys => crate::sys::call(arg_int(&args, 0, 0) as u16, &args[1..], h)?,
 
         _ => {
             if b.is_mutating() {
@@ -777,15 +830,15 @@ pub fn call_mut<H: Host>(b: Builtin, recv: &mut Value, args: Vec<Value>, h: &mut
         ArrSet => {
             let Value::Array(a) = recv else { unreachable!() };
             let i = norm_index(arg_int(&args, 0, 0), a.items.len(), h)?;
-            Rc::make_mut(a).items[i] = args[1].clone();
+            Rc::make_mut(a).items.set(i, args[1].clone());
             Value::Void
         }
         ArrFill => {
             let Value::Array(a) = recv else { unreachable!() };
             if !args.is_empty() {
                 let m = Rc::make_mut(a);
-                for (i, slot) in m.items.iter_mut().enumerate() {
-                    *slot = args[i % args.len()].clone();
+                for i in 0..m.items.len() {
+                    m.items.set(i, args[i % args.len()].clone());
                 }
             }
             Value::Void
@@ -797,9 +850,17 @@ pub fn call_mut<H: Host>(b: Builtin, recv: &mut Value, args: Vec<Value>, h: &mut
         }
         ArrSort => {
             let Value::Array(a) = recv else { unreachable!() };
-            let items = a.items.clone();
-            let sorted = merge_sort(items, h)?;
-            Rc::make_mut(a).items = sorted;
+            match &mut Rc::make_mut(a).items {
+                // unboxed numbers sort directly (stable; same order as compare_values)
+                Items::U8(v) => v.sort(),
+                Items::Int(IntTy::U64, v) => v.sort_by_key(|x| *x as u64),
+                Items::Int(_, v) => v.sort(),
+                Items::Bool(v) => v.sort(),
+                items => {
+                    let sorted = merge_sort(items.to_vec(), h)?;
+                    *items = Items::from_values(sorted);
+                }
+            }
             Value::Void
         }
         ArrShuffle => {
@@ -828,6 +889,67 @@ pub fn call_mut<H: Host>(b: Builtin, recv: &mut Value, args: Vec<Value>, h: &mut
             ensure_growable(a, "remove", h)?;
             let i = norm_index(arg_int(&args, 0, 0), a.items.len(), h)?;
             Rc::make_mut(a).items.remove(i)
+        }
+        ArrPush => {
+            let Value::Array(a) = recv else { unreachable!() };
+            ensure_growable(a, "add", h)?;
+            Rc::make_mut(a).items.push(args[0].clone());
+            Value::Void
+        }
+        ArrPop => {
+            let Value::Array(a) = recv else { unreachable!() };
+            ensure_growable(a, "pop", h)?;
+            if a.items.is_empty() {
+                return Err(h.throw(ExcKind::IndexOutOfBounds, "pop from an empty array".into()));
+            }
+            let m = Rc::make_mut(a);
+            let last = m.items.len() - 1;
+            m.items.remove(last)
+        }
+        ArrClear => {
+            let Value::Array(a) = recv else { unreachable!() };
+            ensure_growable(a, "clear", h)?;
+            Rc::make_mut(a).items.truncate(0);
+            Value::Void
+        }
+        ArrAddAll => {
+            let other = deep_clone(&args[0].deref(), h)?;
+            let Value::Array(b) = other else { return Err(h.throw(ExcKind::NullPointer, "addAll of Null".into())) };
+            let Value::Array(a) = recv else { unreachable!() };
+            ensure_growable(a, "addAll", h)?;
+            Rc::make_mut(a).items.extend(&b.items);
+            Value::Void
+        }
+        ArrSwap => {
+            let Value::Array(a) = recv else { unreachable!() };
+            let n = a.items.len();
+            let i = norm_index(arg_int(&args, 0, 0), n, h)?;
+            let j = norm_index(arg_int(&args, 1, 0), n, h)?;
+            Rc::make_mut(a).items.swap(i, j);
+            Value::Void
+        }
+        ArrPermute => {
+            // reorder: element k becomes the old element order[k] (a permutation)
+            let order: Vec<usize> = match args[0].deref() {
+                Value::Array(o) => o.items.iter().map(|v| v.as_int() as usize).collect(),
+                _ => Vec::new(),
+            };
+            let Value::Array(a) = recv else { unreachable!() };
+            let n = a.items.len();
+            let mut seen = vec![false; n];
+            if order.len() != n || order.iter().any(|&i| i >= n || std::mem::replace(&mut seen[i], true)) {
+                return Err(h.throw(ExcKind::IllegalArgument, "not a permutation of the array's indices".into()));
+            }
+            let m = Rc::make_mut(a);
+            let items = match &m.items {
+                Items::Vals(v) => Items::Vals(order.iter().map(|&i| v[i].clone()).collect()),
+                Items::U8(v) => Items::U8(order.iter().map(|&i| v[i]).collect()),
+                Items::Int(t, v) => Items::Int(*t, order.iter().map(|&i| v[i]).collect()),
+                Items::Float(t, v) => Items::Float(*t, order.iter().map(|&i| v[i]).collect()),
+                Items::Bool(v) => Items::Bool(order.iter().map(|&i| v[i]).collect()),
+            };
+            m.items = items;
+            Value::Void
         }
         DictSet => {
             let Value::Dict(d) = recv else { unreachable!() };
@@ -894,7 +1016,7 @@ pub fn free_value(v: &Value) {
                 free_value(f);
             }
         }
-        Value::Array(a) => a.items.iter().for_each(free_value),
+        Value::Array(a) => a.items.iter().for_each(|v| free_value(&v)),
         Value::Dict(d) => d.entries.iter().for_each(|(_, v)| free_value(v)),
         Value::Tuple(t) => t.iter().for_each(free_value),
         _ => {}

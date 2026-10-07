@@ -1,0 +1,178 @@
+@using sdk 1
+
+// crypto.AsymmetricCryptography / crypto.PublicKey / crypto.PrivateKey: public-key encryption
+// and signatures with RSA (spec 14.11).
+//
+//     AsymmetricCryptography ac = new AsymmetricCryptography(algorithm="RSA")
+//     pk, sk = ac.deriveKeySet()                         // or deriveKeySet(random=&r)
+//     Bytes sealed = ac.encrypt(plain="hi".encode(), key=&pk)
+//     String text = ac.decrypt(encrypted=sealed, key=&sk).decode()
+//     Bytes sig = ac.sign(data, key=&sk)
+//     Boolean ok = ac.verify(data, sig, key=&pk)
+//
+// Algorithms: "RSA" (3072-bit keys), "RSA-2048", "RSA-3072", "RSA-4096". Encryption uses
+// OAEP with SHA-256 (at most keyBytes - 66 bytes per message: encrypt a symmetric key for
+// larger data), signatures use PSS with SHA-256. Keys are saved and loaded as PEM text.
+
+using intrinsics as intr
+using math.Random as Random
+
+public class PublicKey {
+    private DTVariable handle
+
+    public PublicKey(DTVariable handle) {
+        this.handle = handle
+    }
+
+    public static function PublicKey fromPem(&String pem) {
+        DTVariable h = intr.rsaFromPem(pem)
+        if (intr.rsaIsPrivate(h)) {
+            return new PublicKey(intr.rsaPublicOf(h))
+        }
+        return new PublicKey(h)
+    }
+
+    // (internal) the key handle
+    public function DTVariable __handle() {
+        return handle.clone()
+    }
+
+    // SubjectPublicKeyInfo PEM ("-----BEGIN PUBLIC KEY-----")
+    public function String toPem() {
+        return intr.rsaToPem(handle)
+    }
+
+    public function Int64 bits() {
+        return intr.rsaBits(handle)
+    }
+
+    public function String toString() {
+        return f"PublicKey(RSA-{intr.rsaBits(handle)})"
+    }
+}
+
+public class PrivateKey {
+    private DTVariable handle
+
+    public PrivateKey(DTVariable handle) {
+        this.handle = handle
+    }
+
+    public static function PrivateKey fromPem(&String pem) {
+        DTVariable h = intr.rsaFromPem(pem)
+        if (!intr.rsaIsPrivate(h)) {
+            throw IllegalArgumentException("the PEM text holds a public key, not a private key")
+        }
+        return new PrivateKey(h)
+    }
+
+    // (internal) the key handle
+    public function DTVariable __handle() {
+        return handle.clone()
+    }
+
+    public function PublicKey publicKey() {
+        return new PublicKey(intr.rsaPublicOf(handle))
+    }
+
+    // PKCS#8 PEM ("-----BEGIN PRIVATE KEY-----"); keep it secret
+    public function String toPem() {
+        return intr.rsaToPem(handle)
+    }
+
+    public function Int64 bits() {
+        return intr.rsaBits(handle)
+    }
+
+    // never prints key material
+    public function String toString() {
+        return f"PrivateKey(RSA-{intr.rsaBits(handle)})"
+    }
+}
+
+public class AsymmetricCryptography {
+    private Immutable String alg
+    private Immutable Int64 keyBits
+
+    public AsymmetricCryptography(&String algorithm) {
+        String a = algorithm.toUpperCase().replace("_", "-")
+        Int64 bits = 0
+        switch (a as x) {
+            case x == "RSA" or x == "RSA-3072":
+                bits = 3072
+            case x == "RSA-2048":
+                bits = 2048
+            case x == "RSA-4096":
+                bits = 4096
+            default:
+                throw IllegalArgumentException(f"unknown asymmetric algorithm \"{algorithm}\" (available: RSA, RSA-2048, RSA-3072, RSA-4096)")
+        }
+        this.alg = algorithm.clone()
+        this.keyBits = bits
+    }
+
+    public static function String[] algorithms() {
+        return ["RSA", "RSA-2048", "RSA-3072", "RSA-4096"]
+    }
+
+    public function String algorithm() {
+        return alg.clone()
+    }
+
+    // ------------------------------------------------------------------ keys
+    // a new key pair from the operating system's secure random generator
+    public function (PublicKey, PrivateKey) deriveKeySet() {
+        pub, priv = intr.rsaGenerateOs(keyBits)
+        return (new PublicKey(pub), new PrivateKey(priv))
+    }
+
+    // a new key pair drawn from `random` (a seeded generator gives the same keys every time:
+    // only for tests)
+    public function (PublicKey, PrivateKey) deriveKeySet(&Random random) {
+        pub, priv = intr.rsaGenerate(keyBits, random.__handle())
+        return (new PublicKey(pub), new PrivateKey(priv))
+    }
+
+    // ------------------------------------------------------------------ encryption
+    public function Bytes encrypt(&Bytes plain, &PublicKey key) {
+        return new Bytes(intr.rsaEncryptOs(key.__handle(), plain.toArray()))
+    }
+
+    public function Bytes encrypt(&Bytes plain, &PublicKey key, &Random random) {
+        return new Bytes(intr.rsaEncrypt(key.__handle(), plain.toArray(), random.__handle()))
+    }
+
+    public function Bytes decrypt(&Bytes encrypted, &PrivateKey key) {
+        return new Bytes(intr.rsaDecrypt(key.__handle(), encrypted.toArray()))
+    }
+
+    // text: the UTF-8 bytes are encrypted, the result is base64
+    public function String encrypt(&String plain, &PublicKey key) {
+        return intr.bytesToBase64(intr.rsaEncryptOs(key.__handle(), intr.strEncode(plain, "utf-8")), false)
+    }
+
+    public function String decrypt(&String encrypted, &PrivateKey key) {
+        return intr.bytesDecode(intr.rsaDecrypt(key.__handle(), intr.bytesFromBase64(encrypted)), "utf-8")
+    }
+
+    // ------------------------------------------------------------------ signatures
+    public function Bytes sign(&Bytes data, &PrivateKey key) {
+        return new Bytes(intr.rsaSignOs(key.__handle(), data.toArray()))
+    }
+
+    public function Bytes sign(&String text, &PrivateKey key) {
+        return new Bytes(intr.rsaSignOs(key.__handle(), intr.strEncode(text, "utf-8")))
+    }
+
+    public function Boolean verify(&Bytes data, &Bytes signature, &PublicKey key) {
+        return intr.rsaVerify(key.__handle(), data.toArray(), signature.toArray())
+    }
+
+    public function Boolean verify(&String text, &Bytes signature, &PublicKey key) {
+        return intr.rsaVerify(key.__handle(), intr.strEncode(text, "utf-8"), signature.toArray())
+    }
+
+    public function String toString() {
+        return f"AsymmetricCryptography({alg})"
+    }
+}

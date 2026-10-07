@@ -1,0 +1,103 @@
+@using sdk 1
+
+// net.TcpSocket: a TCP connection (spec 14.9). Reads and writes block; setTimeout() makes
+// them throw TimeoutException after a while.
+//
+//     TcpSocket s = new TcpSocket("example.com", 80)
+//     s.write("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+//     String? status = s.readLine()
+
+using intrinsics as intr
+
+public class TcpSocket {
+    private DTVariable handle
+
+    public TcpSocket(&String host, Int64 port) {
+        this.handle = intr.tcpConnect(host, port, 0)
+    }
+
+    // gives up connecting after `timeoutMillis`
+    public TcpSocket(&String host, Int64 port, Int64 timeoutMillis) {
+        this.handle = intr.tcpConnect(host, port, timeoutMillis)
+    }
+
+    // (internal) wraps an accepted connection
+    public static function TcpSocket __wrap(DTVariable h) {
+        TcpSocket s = new TcpSocket(h)
+        return s
+    }
+
+    private TcpSocket(DTVariable h) {
+        this.handle = h
+    }
+
+    // up to `max` bytes as soon as some arrive; empty when the peer closed the connection
+    public function Bytes read(Int64 max) {
+        return new Bytes(intr.tcpRead(handle, max))
+    }
+
+    // everything until the peer closes the connection
+    public function Bytes readAll() {
+        Bytes all = new Bytes()
+        for (;;) {
+            UInt8[] chunk = intr.tcpRead(handle, 65536)
+            if (chunk.isEmpty()) {
+                break
+            }
+            all.append(&new Bytes(chunk))
+        }
+        return all
+    }
+
+    // the next line (UTF-8, without the line break); null when the connection closed
+    public function String? readLine() {
+        return intr.tcpReadLine(handle)
+    }
+
+    public function void write(&Bytes data) {
+        intr.tcpWrite(handle, data.toArray())
+    }
+
+    public function void write(&String text) {
+        intr.tcpWrite(handle, intr.strEncode(text, "utf-8"))
+    }
+
+    public function void writeLine(&String text) {
+        intr.tcpWrite(handle, intr.strEncode(text + "\n", "utf-8"))
+    }
+
+    // 0 = wait forever
+    public function void setTimeout(Int64 millis) {
+        intr.tcpSetTimeout(handle, millis)
+    }
+
+    // "host:port" of this end
+    public function String localAddress() {
+        return intr.tcpLocalAddress(handle)
+    }
+
+    // "host:port" of the other end
+    public function String remoteAddress() {
+        return intr.tcpPeerAddress(handle)
+    }
+
+    // tells the peer that nothing more will be written (reading still works)
+    public function void shutdownOutput() {
+        intr.tcpShutdown(handle)
+    }
+
+    public function void close() {
+        intr.close(handle)
+    }
+
+    public function Boolean isOpen() {
+        return intr.isOpen(handle)
+    }
+
+    public function String toString() {
+        if (!intr.isOpen(handle)) {
+            return "TcpSocket(closed)"
+        }
+        return f"TcpSocket({intr.tcpLocalAddress(handle)} -> {intr.tcpPeerAddress(handle)})"
+    }
+}

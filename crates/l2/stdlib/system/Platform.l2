@@ -1,0 +1,80 @@
+@using sdk 1
+
+// system.Platform: the operating system the program runs on (spec 14.6).
+
+using intrinsics as intr
+
+public class Platform {
+    // "windows", "mac", "linux", "freebsd", ...
+    public Immutable String systemName
+    // "windows" or "unix"
+    public Immutable String family
+    // "x86_64", "aarch64", "x86", ...
+    public Immutable String architecture
+    // result of the last shell() call (kept outside the object so that a borrowed
+    // platform can run commands)
+    private DTVariable last
+
+    public Platform() {
+        this.systemName = intr.sysInfo("os")!
+        this.family = intr.sysInfo("family")!
+        this.architecture = intr.sysInfo("arch")!
+        this.last = intr.cellNew(null)
+    }
+
+    public static function Platform current() {
+        return new Platform()
+    }
+
+    public function Boolean isWindows() {
+        return systemName == "windows"
+    }
+
+    public function Boolean isMac() {
+        return systemName == "mac"
+    }
+
+    public function Boolean isLinux() {
+        return systemName == "linux"
+    }
+
+    public function Boolean isUnix() {
+        return family == "unix"
+    }
+
+    // Runs a program with arguments (no shell) and waits for it.
+    public function ShellResult shell(&String[] command) {
+        return record(System.shell(command, false))
+    }
+
+    // Runs `command` through the platform shell and waits for it.
+    public function ShellResult shell(&String command) {
+        return record(System.shell(command, false))
+    }
+
+    public function ShellResult shell(&String[] command, Boolean printToConsole) {
+        return record(System.shell(command, printToConsole))
+    }
+
+    public function ShellResult shell(&String command, Boolean printToConsole) {
+        return record(System.shell(command, printToConsole))
+    }
+
+    private function ShellResult record(ShellResult r) {
+        intr.cellSet(last, r.clone())
+        return r
+    }
+
+    // the result of the most recent shell() call on this platform, if any
+    public function ShellResult? lastResult() {
+        DTVariable v = intr.cellGet(last)
+        if (v == null) {
+            return null
+        }
+        return v.castTo(ShellResult)
+    }
+
+    public function String toString() {
+        return f"Platform({systemName}, {architecture})"
+    }
+}

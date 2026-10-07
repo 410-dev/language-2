@@ -1,0 +1,9 @@
+// error: cannot move out of field 'name'; use .clone()
+class Item {
+    public String name
+    public Item(String n) { this.name = n }
+}
+function void main() {
+    Item[] items = [new Item("a")]
+    items.map((it) -> it.name)
+}

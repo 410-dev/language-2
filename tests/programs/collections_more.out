@@ -1,0 +1,15 @@
+{"b", "a"} 2 true false true
+{"b", "a", "c", "d"} {"b", "a"} {"c"} 4
+true false ["b", "c"] true
+{0, 1, 2}
+first second 1
+Queue["second", "third"]
+second third true
+dequeue from an empty queue
+Deque[0, 1, 2, 3, 4, 5] 0 1 5 2 4
+4 3 2 0
+1 7 PriorityQueue[1, 2, 3, 5, 7, 8, 9]
+[1, 2, 3, 5, 7, 8, 9]
+high
+["mid", "low"]
+PriorityQueue["apple", "fig", "pear"]

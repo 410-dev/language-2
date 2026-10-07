@@ -1,0 +1,70 @@
+@using sdk 1
+
+// io.Directory: directories (spec 14.8).
+
+using intrinsics as intr
+
+public class Directory {
+    // entry names (files and directories), sorted
+    public static function String[] list(&String path) {
+        return intr.fsList(path)
+    }
+
+    // all files below `path`, as paths relative to it, sorted
+    public static function String[] walk(&String path) {
+        String[] out = String.array()
+        Directory.walkInto(path.clone(), "", *out)
+        return out
+    }
+
+    private static function void walkInto(&String dir, &String prefix, *String[] out) {
+        for (name in intr.fsList(dir)) {
+            String full = intr.pathJoin([dir.clone(), name.clone()])
+            String rel = prefix.isEmpty() ? name.clone() : intr.pathJoin([prefix.clone(), name.clone()])
+            if (intr.fsIsDir(full)) {
+                Directory.walkInto(full, rel, out)
+            } else {
+                out.add(rel)
+            }
+        }
+    }
+
+    // creates the directory and any missing parents
+    public static function void create(&String path) {
+        intr.fsMakeDir(path, true)
+    }
+
+    public static function void create(&String path, Boolean parents) {
+        intr.fsMakeDir(path, parents)
+    }
+
+    // deletes an empty directory
+    public static function void delete(&String path) {
+        intr.fsDeleteDir(path, false)
+    }
+
+    // `recursive`: also deletes everything inside it
+    public static function void delete(&String path, Boolean recursive) {
+        intr.fsDeleteDir(path, recursive)
+    }
+
+    public static function Boolean exists(&String path) {
+        return intr.fsIsDir(path)
+    }
+
+    public static function String current() {
+        return intr.sysCwd()
+    }
+
+    public static function void setCurrent(&String path) {
+        intr.sysSetCwd(path)
+    }
+
+    public static function String temp() {
+        return intr.fsTempDir()
+    }
+
+    public static function String? home() {
+        return intr.fsHomeDir()
+    }
+}

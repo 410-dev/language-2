@@ -1,0 +1,4 @@
+// error: is not provided by this toolchain (SDK 1)
+@using sdk 99
+function void main() {
+}

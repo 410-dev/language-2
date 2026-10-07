@@ -1,0 +1,77 @@
+@using sdk 1
+
+// crypto.HashDigest: hash functions and HMAC (spec 14.11).
+//
+//     HashDigest d = new HashDigest(algorithm="SHA-512")
+//     String hex = d.digest("my data").toHex()
+//     Bytes mac = new HashDigest("SHA-256").hmac(key, message)
+//
+// Algorithms: SHA-224, SHA-256, SHA-384, SHA-512, SHA3-224, SHA3-256, SHA3-384, SHA3-512, and
+// MD5 / SHA-1 for compatibility with old formats only (both are broken for security use).
+
+using intrinsics as intr
+
+public class HashDigest {
+    private Immutable String alg
+    // incremental state for update() / finish()
+    private DTVariable state
+
+    public HashDigest(&String algorithm) {
+        this.state = intr.hashNew(algorithm)
+        this.alg = algorithm.clone()
+    }
+
+    public static function String[] algorithms() {
+        return intr.hashAlgorithms()
+    }
+
+    public function String algorithm() {
+        return alg.clone()
+    }
+
+    // ------------------------------------------------------------------ one shot
+    public function Bytes digest(&Bytes data) {
+        return new Bytes(intr.hashDigest(alg, data.toArray()))
+    }
+
+    // the digest of the text's UTF-8 bytes
+    public function Bytes digest(&String text) {
+        return new Bytes(intr.hashDigest(alg, intr.strEncode(text, "utf-8")))
+    }
+
+    public function String hexDigest(&Bytes data) {
+        return intr.bytesToHex(intr.hashDigest(alg, data.toArray()), false)
+    }
+
+    public function String hexDigest(&String text) {
+        return intr.bytesToHex(intr.hashDigest(alg, intr.strEncode(text, "utf-8")), false)
+    }
+
+    // ------------------------------------------------------------------ streaming
+    public function void update(&Bytes data) {
+        intr.hashUpdate(state, data.toArray())
+    }
+
+    public function void update(&String text) {
+        intr.hashUpdate(state, intr.strEncode(text, "utf-8"))
+    }
+
+    // the digest of everything passed to update() since the last finish()
+    public function Bytes finish() {
+        return new Bytes(intr.hashFinish(state))
+    }
+
+    // ------------------------------------------------------------------ HMAC
+    // keyed message authentication code
+    public function Bytes hmac(&Bytes key, &Bytes data) {
+        return new Bytes(intr.hmac(alg, key.toArray(), data.toArray()))
+    }
+
+    public function Bytes hmac(&Bytes key, &String text) {
+        return new Bytes(intr.hmac(alg, key.toArray(), intr.strEncode(text, "utf-8")))
+    }
+
+    public function String toString() {
+        return f"HashDigest({alg})"
+    }
+}

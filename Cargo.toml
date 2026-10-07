@@ -9,3 +9,7 @@ license = "MIT"
 
 [profile.release]
 debug = false
+
+# dependencies (big-number RSA, hashing) are slow unoptimised; keep debug builds usable
+[profile.dev.package."*"]
+opt-level = 2

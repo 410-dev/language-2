@@ -1,6 +1,7 @@
 //! Semantic analysis: declaration collection, name resolution, type checking, generic
 //! instantiation (monomorphisation) and lowering to HIR.
 
+mod arrays;
 mod expr;
 mod members;
 mod oper;
@@ -471,8 +472,19 @@ impl<'a> Checker<'a> {
                             self.err(d.span, "expected '@using sdk <version>'");
                         } else if let Some(v) = d.words.get(1) {
                             match v.parse::<u32>() {
-                                Ok(1) => self.config.sdk = 1,
-                                _ => self.err(d.span, format!("unsupported SDK version '{}' (supported: 1)", v)),
+                                Ok(n) if n == crate::sdk::SDK_VERSION => self.config.sdk = n,
+                                _ => {
+                                    let installed: Vec<String> = crate::sdk::installed().iter().map(|v| v.to_string()).collect();
+                                    self.err(
+                                        d.span,
+                                        format!(
+                                            "SDK version '{}' is not provided by this toolchain (SDK {}) and is not installed (installed: {})",
+                                            v,
+                                            crate::sdk::SDK_VERSION,
+                                            if installed.is_empty() { "none".to_string() } else { installed.join(", ") }
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }
@@ -746,7 +758,8 @@ impl<'a> Checker<'a> {
             if t == Type::Void {
                 self.err(p.span, "parameters cannot have type void");
             }
-            if self.config.memory == MemoryMode::Manual && matches!(t, Type::Ref(..)) {
+            // the standard library is always ownership-mode code (spec 9.1)
+            if self.config.memory == MemoryMode::Manual && matches!(t, Type::Ref(..)) && !self.modules[module].is_stdlib {
                 self.err(p.span, "'&' and '*' references cannot be used with MemoryManagement=manual");
             }
             tys.push(t);
@@ -770,7 +783,7 @@ impl<'a> Checker<'a> {
             let subst = Subst::new();
             let (params, names) = self.param_types(&d.params, mi, &subst);
             let ret = self.resolve_type(&d.ret, mi, &subst);
-            self.check_ret_type(&ret, d.span);
+            self.check_ret_type(&ret, mi, d.span);
             let throws = self.resolve_throws(&d.throws, mi, d.span);
             // duplicate signature check
             if let Some(existing) = self.modules[mi].funcs.get(&d.name).cloned() {
@@ -791,9 +804,9 @@ impl<'a> Checker<'a> {
         self.modules[mi].funcs.entry(d.name.clone()).or_default().push(FnRef { decl: d, module: mi, func });
     }
 
-    fn check_ret_type(&mut self, ret: &Type, span: Span) {
+    fn check_ret_type(&mut self, ret: &Type, module: usize, span: Span) {
         if let Type::Ref(_, _) = ret {
-            if self.config.memory == MemoryMode::Manual {
+            if self.config.memory == MemoryMode::Manual && !self.modules[module].is_stdlib {
                 self.err(span, "references cannot be used with MemoryManagement=manual");
             }
         }
@@ -1338,7 +1351,7 @@ impl<'a> Checker<'a> {
             }
             let (params, names) = self.param_types(&m.params, module, &subst);
             let ret = self.resolve_type(&m.ret, module, &subst);
-            self.check_ret_type(&ret, m.span);
+            self.check_ret_type(&ret, module, m.span);
             let throws = self.resolve_throws(&m.throws, module, m.span);
             let is_static = m.mods.is_static;
             if m.name.starts_with("operator") && m.name.len() > "operator".len() {

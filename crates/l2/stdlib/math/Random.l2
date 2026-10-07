@@ -1,0 +1,101 @@
+@using sdk 1
+
+// math.Random: a random number generator object (spec 14.10).
+//
+//     Random r = new Random()            // seeded from the operating system: unpredictable
+//     Random t = new Random(seed=42)     // reproducible sequence (tests, simulations)
+//
+// Both use ChaCha20, a cryptographically secure generator; a seeded generator is still
+// predictable to anyone who knows the seed, so use new Random() for keys and secrets.
+
+using intrinsics as intr
+
+public class Random {
+    private DTVariable handle
+
+    public Random() {
+        this.handle = intr.rngNew(0, false)
+    }
+
+    public Random(Int64 seed) {
+        this.handle = intr.rngNew(seed, true)
+    }
+
+    // (internal) the generator handle, for cryptography
+    public function DTVariable __handle() {
+        return handle.clone()
+    }
+
+    public function Boolean isSeeded() {
+        return intr.rngIsSeeded(handle)
+    }
+
+    // any Int64
+    public function Int64 nextInt64() {
+        return intr.rngLong(handle)
+    }
+
+    // 0 <= n < bound
+    public function Int64 nextInt(Int64 bound) {
+        return intr.rngInt(handle, 0, bound)
+    }
+
+    // origin <= n < bound
+    public function Int64 nextInt(Int64 origin, Int64 bound) {
+        return intr.rngInt(handle, origin, bound)
+    }
+
+    // 0.0 <= x < 1.0
+    public function Float64 nextFloat() {
+        return intr.rngFloat(handle)
+    }
+
+    // origin <= x < bound
+    public function Float64 nextFloat(Float64 origin, Float64 bound) {
+        if (!(bound > origin)) {
+            throw IllegalArgumentException(f"bound must be greater than origin ({bound} <= {origin})")
+        }
+        return origin + intr.rngFloat(handle) * (bound - origin)
+    }
+
+    public function Boolean nextBoolean() {
+        return intr.rngInt(handle, 0, 2) == 1
+    }
+
+    // normally distributed: mean 0, standard deviation 1
+    public function Float64 nextGaussian() {
+        return intr.rngGaussian(handle)
+    }
+
+    public function Float64 nextGaussian(Float64 mean, Float64 deviation) {
+        return mean + deviation * intr.rngGaussian(handle)
+    }
+
+    public function Bytes nextBytes(Int64 n) {
+        return new Bytes(intr.rngBytes(handle, n))
+    }
+
+    // a random element (a copy for objects and strings)
+    public function T choose[T](&T[] items) {
+        if (items.isEmpty()) {
+            throw IllegalArgumentException("cannot choose from an empty array")
+        }
+        return items[intr.rngInt(handle, 0, items.length())].clone()
+    }
+
+    // shuffles the array in place (Fisher-Yates)
+    public function void shuffle[T](*T[] items) {
+        Int64[] order = Int64.range(0, items.length())
+        for (Int64 i = order.length() - 1; i > 0; i -= 1) {
+            Int64 j = intr.rngInt(handle, 0, i + 1)
+            Int64 t = order[i]
+            order[i] = order[j]
+            order[j] = t
+        }
+        items.__permute(order)
+    }
+
+    public function String toString() {
+        return intr.rngIsSeeded(handle) ? "Random(seeded)" : "Random()"
+    }
+}

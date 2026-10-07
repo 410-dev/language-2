@@ -1,0 +1,89 @@
+@using sdk 1
+
+// net.UdpSocket / net.UdpPacket: UDP datagrams (spec 14.9).
+
+using intrinsics as intr
+
+public class UdpPacket {
+    private Bytes payload
+    private Immutable String host
+    private Immutable Int64 senderPort
+
+    public UdpPacket(Bytes data, &String host, Int64 port) {
+        this.payload = data
+        this.host = host.clone()
+        this.senderPort = port
+    }
+
+    public function Bytes data() {
+        return payload.clone()
+    }
+
+    public function String text() {
+        return payload.decode()
+    }
+
+    // the sender
+    public function String address() {
+        return host.clone()
+    }
+
+    public function Int64 port() {
+        return senderPort
+    }
+
+    public function String toString() {
+        return f"UdpPacket({payload.length()} bytes from {host}:{senderPort})"
+    }
+}
+
+public class UdpSocket {
+    private DTVariable handle
+
+    // bound to `host`:`port` (port 0 picks a free port)
+    public UdpSocket(&String host, Int64 port) {
+        this.handle = intr.udpBind(host, port)
+    }
+
+    // bound to a free port on 127.0.0.1
+    public UdpSocket() {
+        this.handle = intr.udpBind("127.0.0.1", 0)
+    }
+
+    // sends one datagram; returns the number of bytes sent
+    public function Int64 send(&Bytes data, &String host, Int64 port) {
+        return intr.udpSend(handle, data.toArray(), host, port)
+    }
+
+    public function Int64 send(&String text, &String host, Int64 port) {
+        return intr.udpSend(handle, intr.strEncode(text, "utf-8"), host, port)
+    }
+
+    // waits for one datagram of at most `max` bytes
+    public function UdpPacket receive(Int64 max) {
+        data, host, port = intr.udpReceive(handle, max)
+        return new UdpPacket(new Bytes(data), host, port)
+    }
+
+    // 0 = wait forever
+    public function void setTimeout(Int64 millis) {
+        intr.udpSetTimeout(handle, millis)
+    }
+
+    public function String localAddress() {
+        return intr.tcpLocalAddress(handle)
+    }
+
+    public function Int64 port() {
+        String[] parts = intr.tcpLocalAddress(handle).split(":")
+        return parts.last().parse(Int64)
+    }
+
+    public function void close() {
+        intr.close(handle)
+    }
+
+    public function String toString() {
+        return intr.isOpen(handle) ? f"UdpSocket({intr.tcpLocalAddress(handle)})" : "UdpSocket(closed)"
+    }
+}

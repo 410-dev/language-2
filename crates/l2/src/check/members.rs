@@ -62,6 +62,10 @@ impl<'a> Checker<'a> {
         x
     }
 
+    pub fn mut_place_pub(&mut self, obj: &'a ast::Expr, name: &str, span: Span) -> Option<Place> {
+        self.mut_place(obj, name, span)
+    }
+
     /// Resolves the receiver of a mutating method to a place.
     fn mut_place(&mut self, obj: &'a ast::Expr, name: &str, span: Span) -> Option<Place> {
         match self.place_of(obj) {
@@ -132,8 +136,38 @@ impl<'a> Checker<'a> {
                 HExpr::new(H::Builtin(Builtin::Clone, vec![recv]), rty, span)
             }
             "castTo" => self.cast_expr(recv, args, span),
+            // JSON text of strings, numbers, Booleans, arrays and dictionaries (spec 14.5)
+            "toJson" => {
+                let a = self.bargs(args, &[P::Val(Type::int64())], 0, "toJson", span)?;
+                let indent = a.into_iter().next().unwrap_or_else(|| HExpr::new(H::Lit(Lit::Int(0)), Type::int64(), span));
+                let code = HExpr::new(H::Lit(Lit::Int(l2_runtime::sys::SysOp::jsonStringify.code() as i128)), Type::int32(), span);
+                HExpr::new(H::Builtin(Builtin::Sys, vec![code, recv, indent]), Type::Str, span)
+            }
             _ => return None,
         })
+    }
+
+    /// Calls a (non-generic) prelude helper function.
+    pub fn prelude_call(&mut self, name: &str, args: Vec<HExpr>, span: Span) -> HExpr {
+        let Some(fid) = self.prelude_func(name) else {
+            self.err(span, format!("internal: prelude function '{}' is missing", name));
+            return self.none(span);
+        };
+        let sig = self.sigs[fid as usize].clone();
+        let args: Vec<HExpr> = args.into_iter().zip(sig.params.iter()).map(|(x, p)| self.pass_arg(x, p, span)).collect();
+        HExpr::new(H::Call(fid, args), sig.ret, span)
+    }
+
+    /// The prelude class `Bytes`.
+    pub fn bytes_type(&mut self, span: Span) -> Type {
+        let pm = self.prelude_module;
+        match self.lookup_type(pm, "Bytes", span) {
+            Some(TypeRef::Class(f)) => match self.instantiate_class(&f, Vec::new(), span) {
+                Some(c) => Type::Class(c),
+                None => Type::Error,
+            },
+            _ => Type::Error,
+        }
     }
 
     pub fn builtin_method(&mut self, obj: &'a ast::Expr, recv: HExpr, name: &str, args: &'a [ast::Arg], _expected: Option<&Type>, span: Span) -> Option<HExpr> {
@@ -227,6 +261,12 @@ impl<'a> Checker<'a> {
                         let code = HExpr::new(H::Lit(Lit::Str(rt_type(&t).encode())), Type::Str, span);
                         b(Builtin::StrParse, vec![recv, code], t)
                     }
+                    // text to Bytes (spec 14.5)
+                    "encode" => {
+                        let a = self.bargs(args, &[P::Borrow(Type::Str)], 0, &what, span)?;
+                        let enc = a.into_iter().next().unwrap_or_else(|| HExpr::new(H::Lit(Lit::Str("utf-8".into())), Type::Str, span));
+                        self.prelude_call("__stringEncode", vec![recv, enc], span)
+                    }
                     "append" | "prepend" => {
                         let a = self.bargs(args, &[P::Borrow(Type::Dyn)], 1, &what, span)?;
                         let place = self.mut_place(obj, name, span)?;
@@ -260,6 +300,12 @@ impl<'a> Checker<'a> {
                         let mut all = vec![recv, wrap];
                         all.extend(a);
                         b(bi, all, rty.clone())
+                    }
+                    // the number's bytes in its own width: "big" (default) or "little" endian
+                    "toBytes" => {
+                        let a = self.bargs(args, &[P::Borrow(Type::Str)], 0, &what, span)?;
+                        let order = a.into_iter().next().unwrap_or_else(|| HExpr::new(H::Lit(Lit::Str("big".into())), Type::Str, span));
+                        self.prelude_call("__numberToBytes", vec![recv, order], span)
                     }
                     "abs" => {
                         self.bargs(args, &[], 0, &what, span)?;
@@ -368,6 +414,7 @@ impl<'a> Checker<'a> {
                         };
                         HExpr::new(H::BuiltinMut(bi, Box::new(place), vec![]), Type::Void, span)
                     }
+                    n if super::arrays::ARRAY_METHODS.contains(&n) => return self.array_method(obj, recv, et, name, args, span),
                     _ => return self.generic_method(recv, name, args, span),
                 };
                 Some(r)
@@ -541,6 +588,19 @@ impl<'a> Checker<'a> {
                     return self.none(span);
                 };
                 return HExpr::new(H::Builtin(Builtin::NumRange, a), Type::Array(Box::new(ty)), span);
+            }
+            "fromBytes" if ty.is_numeric() => {
+                let bt = self.bytes_type(span);
+                let Some(a) = self.bargs(args, &[P::Borrow(Type::Ref(false, Box::new(bt))), P::Borrow(Type::Str)], 1, &what, span) else {
+                    return self.none(span);
+                };
+                let mut it = a.into_iter();
+                let b = it.next().unwrap();
+                let order = it.next().unwrap_or_else(|| HExpr::new(H::Lit(Lit::Str("big".into())), Type::Str, span));
+                let code = HExpr::new(H::Lit(Lit::Str(rt_type(&ty).encode())), Type::Str, span);
+                let v = self.prelude_call("__numberFromBytes", vec![b, code, order], span);
+                let wrap = self.cur_ref().wrap;
+                return HExpr::new(H::Cast(Box::new(v), wrap), ty, span);
             }
             "random" if ty == Type::Str => {
                 let Some(a) = self.bargs(args, &[P::Borrow(Type::Str), P::Val(Type::int64()), P::Val(Type::int64())], 3, &what, span) else {

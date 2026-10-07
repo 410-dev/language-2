@@ -590,6 +590,17 @@ impl<'a> Checker<'a> {
                 self.coerce(x, &ty, value.span)
             }
         };
+        // `s = s + x` / `s += x` on a String variable appends in place instead of copying the
+        // whole string (amortised O(1) instead of O(n) per step)
+        if ty == Type::Str {
+            if let (Place::Local(id), H::Concat(parts)) = (&place, &v.kind) {
+                if parts.len() >= 2 && matches!(parts[0].kind, H::Local(x) if x == *id) {
+                    let rest: Vec<HExpr> = parts[1..].to_vec();
+                    let arg = if rest.len() == 1 { rest.into_iter().next().unwrap() } else { HExpr::new(H::Concat(rest), Type::Str, span) };
+                    return vec![st(StmtKind::Expr(HExpr::new(H::BuiltinMut(Builtin::StrAppend, Box::new(place), vec![arg]), Type::Void, span)), span)];
+                }
+            }
+        }
         let v = self.consume(v);
         if matches!(place, Place::Field(..) | Place::Global(_)) && borrows_locals(&v, &self.cur_ref().borrowing_lambdas) {
             self.err(span, "a lambda that borrows local variables cannot be stored in a field; declare it with 'move' (spec 8.5)");
@@ -776,6 +787,17 @@ impl<'a> Checker<'a> {
 
     fn ret(&mut self, e: Option<&'a ast::Expr>, span: Span) -> Vec<HStmt> {
         let ret = self.cur_ref().ret.clone();
+        // `return this` from a chaining method (one returning `*C` for its own class C)
+        if let (Some(e), Some(Type::Ref(true, inner))) = (e, &ret) {
+            if matches!(e.kind, A::This) && matches!(**inner, Type::Class(_)) {
+                if let Some(this) = self.this_expr(span) {
+                    if self.assignable(&this.ty, inner) {
+                        let rt = ret.clone().unwrap();
+                        return vec![st(StmtKind::Return(Some(HExpr { kind: this.kind, ty: rt, span })), span)];
+                    }
+                }
+            }
+        }
         match e {
             Some(e) => {
                 let x = self.expr(e, ret.as_ref().filter(|t| **t != Type::Void));

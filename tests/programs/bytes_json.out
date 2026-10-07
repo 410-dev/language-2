@@ -1,0 +1,54 @@
+14 bytes: 68c3a96c6c6f2c20ec84b8eab384
+héllo, 세계
+aMOpbGxvLCDshLjqs4Q=
+héllo, 세계
+Hello
+Bytes(61006200)
+ab
+Bytes(e9)
+héll|세계
+Abcd! 98 3 true true
+Bytes(000000)
+16
+error: bytes are not valid UTF-8 text (invalid byte at offset 0); use toHex() or toBase64() for binary data
+error: character '한' cannot be encoded as ASCII
+Bytes(00000102)
+Bytes(02010000)
+258
+511
+Bytes(fffe)
+-2
+Bytes(3ff8000000000000)
+1.5
+Bytes(012c)
+-129
+{"name":"Ann","age":31,"tags":["a","b"],"ok":true,"none":null,"pi":3.25}
+{
+  "name": "Ann",
+  "age": 31,
+  "tags": [
+    "a",
+    "b"
+  ],
+  "ok": true,
+  "none": null,
+  "pi": 3.25
+}
+[1,2,3]
+"quote \" and \n"
+{"a": [1, 2.5, "xé", null], "b": {"c": false}, "big": 123456789012345678901234567890}
+{"a":[1,2.5,"xé",null],"b":{"c":false},"big":123456789012345678901234567890}
+["a", "b", "big"]
+{
+ "a": [
+  1,
+  2.5,
+  "xé",
+  null
+ ],
+ "b": {
+  "c": false
+ },
+ "big": 123456789012345678901234567890
+}
+error: invalid JSON at line 1, offset 6: unexpected character

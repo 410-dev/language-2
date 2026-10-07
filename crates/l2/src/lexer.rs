@@ -353,6 +353,12 @@ impl<'a> Lexer<'a> {
     }
 
     fn push(&mut self, tok: Tok, span: Span) {
+        // a line starting with `.` continues the previous expression (method chains)
+        if tok == Tok::Dot {
+            while self.out.last().map(|t| t.tok == Tok::Newline).unwrap_or(false) {
+                self.out.pop();
+            }
+        }
         match &tok {
             Tok::LParen => self.depth.push('('),
             Tok::LBracket => self.depth.push('['),
@@ -865,6 +871,16 @@ mod tests {
                 Eof
             ]
         );
+    }
+
+    #[test]
+    fn leading_dot_continues() {
+        use Tok::*;
+        assert_eq!(toks("a
+  .b()
+// c
+  .d
+e"), vec![Ident("a".into()), Dot, Ident("b".into()), LParen, RParen, Dot, Ident("d".into()), Newline, Ident("e".into()), Newline, Eof]);
     }
 
     #[test]

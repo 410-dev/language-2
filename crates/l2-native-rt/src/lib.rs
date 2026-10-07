@@ -24,6 +24,13 @@ pub type BoxPtr = *mut Value;
 #[no_mangle]
 pub static mut L2_PENDING: u8 = 0;
 
+/// Address of the pending-exception flag, for programs linked against the shared runtime
+/// (they cannot import data symbols directly).
+#[no_mangle]
+pub extern "C" fn l2_pending_ptr() -> *mut u8 {
+    std::ptr::addr_of_mut!(L2_PENDING)
+}
+
 type ToStringFn = extern "C" fn(BoxPtr) -> BoxPtr;
 type EqualsFn = extern "C" fn(BoxPtr, BoxPtr) -> bool;
 type CompareFn = extern "C" fn(BoxPtr, BoxPtr) -> i32;
@@ -854,7 +861,7 @@ fn drop_rec(v: &Value) -> Result<(), Value> {
             }
             Ok(())
         }
-        Value::Array(a) => a.items.iter().try_for_each(drop_rec),
+        Value::Array(a) => a.items.iter().try_for_each(|v| drop_rec(&v)),
         Value::Dict(d) => d.entries.iter().try_for_each(|(_, x)| drop_rec(x)),
         Value::Tuple(t) => t.iter().try_for_each(drop_rec),
         _ => Ok(()),
@@ -890,7 +897,7 @@ fn free_rec(v: &Value) -> Result<(), Value> {
             }
             Ok(())
         }
-        Value::Array(a) => a.items.iter().try_for_each(free_rec),
+        Value::Array(a) => a.items.iter().try_for_each(|v| free_rec(&v)),
         Value::Dict(d) => d.entries.iter().try_for_each(|(_, x)| free_rec(x)),
         Value::Tuple(t) => t.iter().try_for_each(free_rec),
         _ => Ok(()),

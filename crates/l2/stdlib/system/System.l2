@@ -1,0 +1,118 @@
+@using sdk 1
+
+// system.System: the running program's environment, clocks, sleeping, exiting and shell
+// commands (spec 14.6).
+
+using intrinsics as intr
+using time.Duration as Duration
+
+public class System {
+    // ------------------------------------------------------------------ shell commands
+    // Runs `command` through the platform shell (cmd.exe on Windows, /bin/sh elsewhere), so
+    // pipes, redirection and globbing work - and text inserted into `command` can inject
+    // commands. Waits for it and captures its output.
+    public static function ShellResult shell(&String command) {
+        return System.shell(command, false)
+    }
+
+    // Runs a program with arguments directly (no shell: arguments are never reinterpreted).
+    public static function ShellResult shell(&String[] command) {
+        return System.shell(command, false)
+    }
+
+    // `printToConsole`: also show the output while it runs (and let the command read input).
+    public static function ShellResult shell(&String command, Boolean printToConsole) {
+        String[] none = String.array()
+        DTVariable p = intr.procSpawn(none, command, printToConsole, null)
+        code, out, err = intr.procWait(p)
+        return new ShellResult(code, out, err)
+    }
+
+    public static function ShellResult shell(&String[] command, Boolean printToConsole) {
+        DTVariable p = intr.procSpawn(command, null, printToConsole, null)
+        code, out, err = intr.procWait(p)
+        return new ShellResult(code, out, err)
+    }
+
+    // ------------------------------------------------------------------ time
+    // Pauses the program (like Thread.sleep).
+    public static function void sleep(Int64 millis) {
+        intr.sysSleep(millis)
+    }
+
+    public static function void sleep(&Duration duration) {
+        intr.sysSleep(duration.toMillis())
+    }
+
+    // milliseconds since 1970-01-01T00:00:00Z
+    public static function Int64 currentTimeMillis() {
+        return intr.timeNowMillis()
+    }
+
+    // a monotonic clock in nanoseconds, for measuring intervals
+    public static function Int64 nanoTime() {
+        return intr.timeMonotonicNanos()
+    }
+
+    // ------------------------------------------------------------------ process
+    // Ends the program with `code` after flushing its output.
+    public static function void exit(Int64 code) {
+        intr.sysExit(code, true)
+    }
+
+    public static function Int64 pid() {
+        return intr.sysPid()
+    }
+
+    public static function String currentDirectory() {
+        return intr.sysCwd()
+    }
+
+    public static function void setCurrentDirectory(&String path) {
+        intr.sysSetCwd(path)
+    }
+
+    // ------------------------------------------------------------------ environment
+    public static function String? env(&String name) {
+        return intr.sysEnv(name)
+    }
+
+    public static function void setEnv(&String name, &String value) {
+        intr.sysSetEnv(name, value)
+    }
+
+    public static function void removeEnv(&String name) {
+        intr.sysRemoveEnv(name)
+    }
+
+    public static function Dictionary[String, String] envAll() {
+        return intr.sysEnvAll()
+    }
+
+    // ------------------------------------------------------------------ machine
+    // "windows", "mac", "linux", "freebsd", ...
+    public static function String os() {
+        return intr.sysInfo("os")!
+    }
+
+    // "x86_64", "aarch64", "x86", ...
+    public static function String arch() {
+        return intr.sysInfo("arch")!
+    }
+
+    public static function String? hostName() {
+        return intr.sysInfo("hostname")
+    }
+
+    public static function String? userName() {
+        return intr.sysInfo("user")
+    }
+
+    public static function Int64 cpuCount() {
+        return intr.sysCpuCount()
+    }
+
+    public static function Platform platform() {
+        return new Platform()
+    }
+}

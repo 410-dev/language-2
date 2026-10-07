@@ -1,0 +1,21 @@
+@using sdk 1
+
+// system.Promise: the result of work that finishes later (spec 14.6).
+// Placeholder: the API exists so code can be written against it; the implementation arrives
+// with multithreading and every operation currently throws UnsupportedOperationException.
+
+public class Promise {
+    public Promise() {}
+
+    public function Boolean isDone() {
+        throw UnsupportedOperationException("Promise is not implemented yet (it needs multithreading)")
+    }
+
+    public function void wait() {
+        throw UnsupportedOperationException("Promise is not implemented yet (it needs multithreading)")
+    }
+
+    public function String toString() {
+        return "Promise(unsupported)"
+    }
+}

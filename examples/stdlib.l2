@@ -1,0 +1,66 @@
+// A tour of the standard library: arrays, Bytes, JSON, files, time, crypto, collections and
+// platform tasks (spec 13.3, 14.5-14.12).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using system.*
+using time.*
+using io.*
+using crypto.*
+using data.collections.*
+using math.Random as Random
+
+function void main() {
+    // arrays are growable lists with higher-order methods
+    Int64[] xs = [5, 3, 8, 1]
+    xs.add(7)
+    stdio.println(f"{xs} -> squares of odd: {xs.filter((x) -> x % 2 == 1).map((x) -> x * x)}")
+    Int64[] sorted = xs.clone()
+    sorted.sortBy((a, b) -> b - a)
+    stdio.println(f"sum {xs.reduce(0, (acc, x) -> acc + x)}, descending {sorted}, joined {xs.join("-")}")
+
+    // text, bytes and JSON
+    Bytes data = "안녕, bytes".encode()
+    stdio.println(f"{data.length()} bytes, hex {data.toHex()}, back: {data.decode()}")
+    Dictionary[String, DTVariable] record = {"name": "Ann", "langs": ["l2", "rust"], "age": 31}
+    stdio.println(record.toJson(2))
+
+    // files in a temporary directory
+    String dir = Path.join(Directory.temp(), f"l2-example-{System.pid()}")
+    Directory.create(dir)
+    String file = Path.join(dir, "notes.txt")
+    File.writeLines(file, &["one", "two", "three"])
+    stdio.println(f"{Path.fileName(file)}: {File.readLines(file)}")
+    Directory.delete(dir, true)
+
+    // time
+    Instant start = Instant.now()
+    DateTime moon = DateTime.parse("1969-07-20T20:17:00Z")
+    stdio.println(f"{moon.format("EEEE, MMMM d, yyyy HH:mm XXX")} was {(DateTime.utcNow() - moon).toDays()} days ago")
+
+    // crypto
+    SymmetricCryptography aes = new SymmetricCryptography(algorithm="AES-256")
+    String sealed = aes.encrypt(plain="meet at noon", key="correct horse battery staple")
+    stdio.println(f"sealed ({sealed.length()} chars) -> {aes.decrypt(encrypted=sealed, key="correct horse battery staple")}")
+    stdio.println(f"sha256(\"abc\") = {new HashDigest("SHA-256").hexDigest("abc")}")
+
+    // collections and random numbers
+    PriorityQueue[Int64] pq = new PriorityQueue[Int64]()
+    Random r = new Random(seed=2026)
+    for (i in Int64.range(0, 6)) {
+        pq.add(r.nextInt(100))
+    }
+    stdio.println(f"smallest first: {pq}")
+
+    // one task, a command per operating system
+    PlatformTask hello = new PlatformTask()
+        .description("say hello")
+        .windows(["cmd", "/c", "echo hello from Windows"])
+        .mac(["echo", "hello from macOS"])
+        .linux(["echo", "hello from Linux"])
+        .otherOS((&Platform p) -> { p.shell("echo hello from somewhere else") })
+        .execute()
+    stdio.println(f"{hello.stdout().trim()} (exit code {hello.exitCode()})")
+    stdio.println(f"took {start.elapsed().toMillis() >= 0}")
+}

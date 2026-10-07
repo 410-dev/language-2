@@ -1,0 +1,14 @@
+true
+hello server
+bytes!
+reply
+second line
+closed by peer
+false
+socket is closed
+read timed out
+ping from port match: true
+pong
+receive timed out
+port 70000 out of range 0..65535
+bad url: IllegalArgumentException

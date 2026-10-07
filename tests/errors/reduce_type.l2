@@ -1,0 +1,5 @@
+// error: must return the accumulator type String, found Int64
+function void main() {
+    Int64[] xs = [1, 2]
+    xs.reduce("", (acc, x) -> x)
+}

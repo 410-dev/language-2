@@ -1,0 +1,90 @@
+@using sdk 1
+
+// crypto.SymmetricCryptography: authenticated encryption with one shared key (spec 14.11).
+//
+//     SymmetricCryptography c = new SymmetricCryptography(algorithm="AES-256")
+//     String sealed = c.encrypt(plain="secret text", key="my-secret-key")        // base64 text
+//     String opened = c.decrypt(encrypted=sealed, key="my-secret-key")
+//     Bytes box = c.encrypt(plain=data, key=keyBytes, salt=saltBytes)          // binary
+//
+// Algorithms: AES-128, AES-192, AES-256 (GCM mode) and ChaCha20-Poly1305. Every message gets a
+// fresh random nonce, and decryption detects any change to the data (CryptographyException).
+//
+// Keys: by default `key` is a password or passphrase; the cipher key is derived from it with
+// PBKDF2-HMAC-SHA256 (`iterations`, default 600000) and a salt - the given one, or 16 random
+// bytes - which is stored in the output, so decryption needs only the key. With
+// keyDerivation("none") the key is used as is and must be exactly keySize() bytes, e.g. from
+// generateKey().
+
+using intrinsics as intr
+
+public class SymmetricCryptography {
+    private Immutable String alg
+    // "pbkdf2" (passwords) or "none" (raw keys)
+    private getter setter.chain String keyDerivation = "pbkdf2"
+    private getter setter.chain Int64 iterations = 600000
+
+    public SymmetricCryptography(&String algorithm) {
+        intr.symKeySize(algorithm)
+        this.alg = algorithm.clone()
+    }
+
+    public static function String[] algorithms() {
+        return intr.symAlgorithms()
+    }
+
+    public function String algorithm() {
+        return alg.clone()
+    }
+
+    // key length in bytes for keyDerivation("none")
+    public function Int64 keySize() {
+        return intr.symKeySize(alg)
+    }
+
+    // a random key of keySize() bytes (use with keyDerivation("none"))
+    public function Bytes generateKey() {
+        return new Bytes(intr.secureBytes(intr.symKeySize(alg)))
+    }
+
+    // ------------------------------------------------------------------ binary
+    public function Bytes encrypt(&Bytes plain, &Bytes key) {
+        return new Bytes(intr.symEncrypt(alg, key.toArray(), UInt8.array(), false, keyDerivation, iterations, plain.toArray()))
+    }
+
+    public function Bytes encrypt(&Bytes plain, &Bytes key, &Bytes salt) {
+        return new Bytes(intr.symEncrypt(alg, key.toArray(), salt.toArray(), true, keyDerivation, iterations, plain.toArray()))
+    }
+
+    public function Bytes decrypt(&Bytes encrypted, &Bytes key) {
+        return new Bytes(intr.symDecrypt(alg, key.toArray(), UInt8.array(), false, encrypted.toArray()))
+    }
+
+    // `salt` must match the one used for encryption (it is also stored in the data)
+    public function Bytes decrypt(&Bytes encrypted, &Bytes key, &Bytes salt) {
+        return new Bytes(intr.symDecrypt(alg, key.toArray(), salt.toArray(), true, encrypted.toArray()))
+    }
+
+    // ------------------------------------------------------------------ text
+    // encrypts the text's UTF-8 bytes; the result is base64 text
+    public function String encrypt(&String plain, &String key) {
+        return intr.bytesToBase64(intr.symEncrypt(alg, intr.strEncode(key, "utf-8"), UInt8.array(), false, keyDerivation, iterations, intr.strEncode(plain, "utf-8")), false)
+    }
+
+    public function String encrypt(&String plain, &String key, &String salt) {
+        return intr.bytesToBase64(intr.symEncrypt(alg, intr.strEncode(key, "utf-8"), intr.strEncode(salt, "utf-8"), true, keyDerivation, iterations, intr.strEncode(plain, "utf-8")), false)
+    }
+
+    // decrypts base64 text produced by encrypt(String, String)
+    public function String decrypt(&String encrypted, &String key) {
+        return intr.bytesDecode(intr.symDecrypt(alg, intr.strEncode(key, "utf-8"), UInt8.array(), false, intr.bytesFromBase64(encrypted)), "utf-8")
+    }
+
+    public function String decrypt(&String encrypted, &String key, &String salt) {
+        return intr.bytesDecode(intr.symDecrypt(alg, intr.strEncode(key, "utf-8"), intr.strEncode(salt, "utf-8"), true, intr.bytesFromBase64(encrypted)), "utf-8")
+    }
+
+    public function String toString() {
+        return f"SymmetricCryptography({alg}, keyDerivation={keyDerivation})"
+    }
+}

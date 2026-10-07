@@ -1,0 +1,114 @@
+@using sdk 1
+
+// data.collections.Set: unique values in insertion order (spec 14.12). Strings, numbers and
+// Booleans are compared by value; objects by identity.
+
+public class Set[T] {
+    private Dictionary[T, Boolean] items
+
+    public Set() {
+        this.items = {}
+    }
+
+    public Set(T[] values) {
+        this.items = {}
+        for (v in values) {
+            items.set(v.clone(), true)
+        }
+    }
+
+    // true when the value was not in the set yet
+    public function Boolean add(T value) {
+        if (items.containsKey(&value)) {
+            return false
+        }
+        items.set(value, true)
+        return true
+    }
+
+    // true when the value was in the set
+    public function Boolean remove(&T value) {
+        if (!items.containsKey(value)) {
+            return false
+        }
+        items.remove(value)
+        return true
+    }
+
+    public function Boolean contains(&T value) {
+        return items.containsKey(value)
+    }
+
+    public function Int64 length() {
+        return items.length()
+    }
+
+    public function Boolean isEmpty() {
+        return items.isEmpty()
+    }
+
+    public function void clear() {
+        this.items = {}
+    }
+
+    public function T[] toArray() {
+        return items.keys()
+    }
+
+    // values in either set
+    public function Set[T] union(&Set[T] other) {
+        Set[T] out = new Set[T](items.keys())
+        for (v in other.items.keys()) {
+            out.add(v.clone())
+        }
+        return out
+    }
+
+    // values in both sets
+    public function Set[T] intersection(&Set[T] other) {
+        Set[T] out = new Set[T]()
+        for (v in items.keys()) {
+            if (other.items.containsKey(&v)) {
+                out.add(v.clone())
+            }
+        }
+        return out
+    }
+
+    // values of this set that are not in `other`
+    public function Set[T] difference(&Set[T] other) {
+        Set[T] out = new Set[T]()
+        for (v in items.keys()) {
+            if (!other.items.containsKey(&v)) {
+                out.add(v.clone())
+            }
+        }
+        return out
+    }
+
+    public function Boolean isSubsetOf(&Set[T] other) {
+        for (v in items.keys()) {
+            if (!other.items.containsKey(&v)) {
+                return false
+            }
+        }
+        return true
+    }
+
+    public function Set[T] operator+(&Set[T] other) {
+        return union(other)
+    }
+
+    public function Set[T] operator-(&Set[T] other) {
+        return difference(other)
+    }
+
+    public function Boolean equals(&Set[T] other) {
+        return items.length() == other.items.length() and isSubsetOf(other)
+    }
+
+    public function String toString() {
+        String a = items.keys().toString()
+        return "{" + a.substring(1, a.length() - 1) + "}"
+    }
+}

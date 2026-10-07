@@ -87,7 +87,8 @@ pub fn compile_source(entry_name: &str, src: &str, base: Option<&Path>) -> Resul
     let stem = Path::new(entry_name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     files.push(entry);
     names.push(stem);
-    let mut stdlib = vec![false, false];
+    // the prelude is part of the standard library (it may use intrinsics)
+    let mut stdlib = vec![true, false];
     let mut queue: VecDeque<usize> = VecDeque::from([1]);
     let mut diags = Vec::new();
     while let Some(i) = queue.pop_front() {
@@ -132,6 +133,32 @@ pub const STDLIB: &[(&str, &str)] = &[
     ("math.linear.Tensor", include_str!("../stdlib/math/linear/Tensor.l2")),
     ("math.linear.Matrix", include_str!("../stdlib/math/linear/Matrix.l2")),
     ("math.linear.Vector", include_str!("../stdlib/math/linear/Vector.l2")),
+    ("system.System", include_str!("../stdlib/system/System.l2")),
+    ("system.ShellResult", include_str!("../stdlib/system/ShellResult.l2")),
+    ("system.Platform", include_str!("../stdlib/system/Platform.l2")),
+    ("system.PlatformTask", include_str!("../stdlib/system/PlatformTask.l2")),
+    ("system.Threads", include_str!("../stdlib/system/Threads.l2")),
+    ("system.Promise", include_str!("../stdlib/system/Promise.l2")),
+    ("time.Duration", include_str!("../stdlib/time/Duration.l2")),
+    ("time.Instant", include_str!("../stdlib/time/Instant.l2")),
+    ("time.DateTime", include_str!("../stdlib/time/DateTime.l2")),
+    ("io.File", include_str!("../stdlib/io/File.l2")),
+    ("io.Directory", include_str!("../stdlib/io/Directory.l2")),
+    ("io.Path", include_str!("../stdlib/io/Path.l2")),
+    ("net.TcpSocket", include_str!("../stdlib/net/TcpSocket.l2")),
+    ("net.TcpServer", include_str!("../stdlib/net/TcpServer.l2")),
+    ("net.UdpSocket", include_str!("../stdlib/net/UdpSocket.l2")),
+    ("net.Http", include_str!("../stdlib/net/Http.l2")),
+    ("math.Random", include_str!("../stdlib/math/Random.l2")),
+    ("crypto.HashDigest", include_str!("../stdlib/crypto/HashDigest.l2")),
+    ("crypto.SymmetricCryptography", include_str!("../stdlib/crypto/SymmetricCryptography.l2")),
+    ("crypto.AsymmetricCryptography", include_str!("../stdlib/crypto/AsymmetricCryptography.l2")),
+    ("crypto.KeyDerivation", include_str!("../stdlib/crypto/KeyDerivation.l2")),
+    ("data.Json", include_str!("../stdlib/data/Json.l2")),
+    ("data.collections.Set", include_str!("../stdlib/data/collections/Set.l2")),
+    ("data.collections.Queue", include_str!("../stdlib/data/collections/Queue.l2")),
+    ("data.collections.Deque", include_str!("../stdlib/data/collections/Deque.l2")),
+    ("data.collections.PriorityQueue", include_str!("../stdlib/data/collections/PriorityQueue.l2")),
 ];
 
 enum Source {

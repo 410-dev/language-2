@@ -71,7 +71,10 @@ function void main(String[] args) {
 ```
 
 ### 2.3 `@using`
-- 사용할 SDK와 버전을 지정한다.
+- 사용할 SDK와 버전을 지정한다: `@using sdk 1`.
+- 한 시스템에 여러 SDK 버전을 나란히 설치할 수 있다 (14.13). 하위 호환을 위해 설치 용량을 감수하는 방식이다.
+- 툴체인(`run`, `build`, `check` 등)은 프로그램의 SDK 버전이 자신의 버전과 다르면, 설치된 그 버전의 툴체인에 명령을 그대로 넘긴다. 인터프리터와 바이트코드 VM도 이렇게 프로그램이 요구하는 SDK로 실행된다.
+- 요구한 SDK 버전이 설치되어 있지 않으면 컴파일 에러 (설치된 버전 목록을 함께 표시).
 
 ### 2.4 `@runtime`
 - 이 프로그램이 지원하는 실행 방식을 나열한다: `compiler`, `interpreter`, `bytecode`.
@@ -83,7 +86,7 @@ function void main(String[] args) {
 
 | 옵션                      | 값                              | 기본값                 | 설명                                              |
 | ------------------------- | ------------------------------- | ---------------------- | ------------------------------------------------- |
-| `IncludeDependencies`     | `true` / `false`                | `false`                | 의존성 포함 여부                                  |
+| `IncludeDependencies`     | `true` / `false`                | `false`                | 런타임(표준 라이브러리 구현 포함)을 실행 파일에 넣을지 여부 |
 | `Target`                  | `i386`, `amd64`, `arm64`의 목록 | `[i386, amd64, arm64]` | 네이티브 컴파일 타깃                              |
 | `EnableSoftwareEmulation` | `true` / `false`                | `false`                | 하드웨어 미지원 기능의 소프트웨어 에뮬레이션 허용 |
 | `MemoryManagement`        | `ownership` / `manual`          | `ownership`            | 메모리 관리 정책                                  |
@@ -92,7 +95,16 @@ function void main(String[] args) {
 - 컴파일러는 `Target`에 나열된 모든 플랫폼용 바이너리를 생성한다 (크로스 컴파일).
 - 컴파일러가 실행 중인 플랫폼이 목록에 없어도 컴파일은 가능하다.
 - `EnableSoftwareEmulation`은 네이티브 컴파일에만 의미가 있다. 인터프리터와 바이트코드 VM은 항상 소프트웨어로 처리한다.
-- 구현 노트: 타깃별 링크를 위해 LLVM 링커(lld)를 컴파일러와 함께 배포하고 런타임 라이브러리는 정적 링크한다.
+- 구현 노트: 타깃별 링크를 위해 LLVM 링커(lld)를 컴파일러와 함께 배포한다.
+
+**IncludeDependencies 동작**
+- `false`(기본값): 런타임을 실행 파일에 넣지 않는다. 실행 파일은 실행될 때 시스템에 설치된 **같은 SDK 버전**의 공유 런타임(`l2_native_rt.dll` / `libl2_native_rt.so` / `libl2_native_rt.dylib`)을 불러온다 (Python처럼 런타임이 설치된 시스템을 전제로 한다). 실행 파일은 수십 KB이고, 런타임 수정은 SDK 갱신으로 반영된다.
+  - 찾는 순서: SDK 디렉터리 `<SDK 홈>/sdk/<버전>/lib/<타깃 트리플>/` → 실행 파일과 같은 디렉터리 → 시스템 검색 경로(PATH 등).
+  - 찾지 못하면 설치 방법을 안내하는 메시지를 표준 에러에 출력하고 종료 코드 127로 끝난다.
+  - `language-2 run --backend compiler`는 임시 실행 파일 옆에 공유 런타임을 복사해 실행하므로 SDK를 설치하지 않아도 된다.
+- `true`: 런타임과 표준 라이브러리 구현을 정적 링크한 단일 실행 파일(수 MB)을 만든다. language-2가 설치되지 않은 시스템에서도 실행된다.
+- 인터프리터와 바이트코드 VM은 툴체인 안에 런타임이 들어 있으므로 이 옵션과 무관하다.
+- 구현 노트: Windows에서는 공유 런타임 DLL을 지연 로드(`/DELAYLOAD`)하고 시작 코드가 SDK 디렉터리에서 먼저 불러온다. Linux/macOS는 SDK 라이브러리 디렉터리와 실행 파일 디렉터리(`$ORIGIN`)를 rpath로 기록한다. 공유 런타임의 데이터(예외 플래그)는 시작할 때 받아 둔 포인터로 접근한다.
 
 ### 2.6 `@runtimecfg`
 | 옵션              | 값               | 기본값  | 설명                    |
@@ -123,6 +135,13 @@ function void main(String[] args) {
   - 줄이 이항 연산자로 끝나는 경우
   - 줄이 쉼표로 끝나는 경우
 - 단, `using pkg.*`의 `*`는 줄을 잇지 않는다.
+- 줄이 `.`으로 시작하면 앞 줄의 식에 이어진다 (메서드 체이닝):
+```
+PlatformTask t = new PlatformTask()
+    .description("build")
+    .windows(["cmd", "/c", "build.bat"])
+    .execute()
+```
 
 ### 3.3 리터럴
 | 종류        | 예시                                    |
@@ -300,7 +319,7 @@ copied String s = "abcd"
 ### 6.1 산술
 | 연산자 | 의미             | 비고                                                         |
 | ------ | ---------------- | ------------------------------------------------------------ |
-| `+`    | 덧셈             | 문자열 연결 포함                                             |
+| `+`    | 덧셈             | 문자열 연결, 배열 연결(같은 타입의 새 배열) 포함             |
 | `-`    | 뺄셈 / 단항 부호 |                                                              |
 | `*`    | 곱셈             |                                                              |
 | `/`    | 나눗셈           | 정수끼리는 0 방향 절삭 (`5 / 2 == 2`), 실수 포함 시 실수 나눗셈 |
@@ -310,6 +329,7 @@ copied String s = "abcd"
 - 정수 연산 오버플로는 파일의 `IntegerOverflow` 정책을 따른다 (`error`일 때 `ArithmeticException`).
 - 정수 0 나누기는 `ArithmeticException`.
 - 정책과 무관하게 순환 연산이 필요하면 명시적 메서드를 사용한다: `a.addWrap(b)`, `a.subWrap(b)`, `a.mulWrap(b)`.
+- `String` 변수에 대한 `s = s + x`와 `s += x`는 새 문자열을 만들지 않고 제자리에 덧붙인다 (`s.append(x)`와 같다). 반복문에서 문자열을 이어 붙여도 전체 길이에 비례하는 비용만 든다.
 
 ### 6.2 비교와 동등성
 | 연산자               | 의미                                     |
@@ -485,13 +505,18 @@ Throwable
 ├── Error
 │   └── OutOfMemoryError, StackOverflowError ...
 └── Exception                         (checked)
-    ├── IOException
+    ├── IOException                   // 파일, 네트워크, 프로세스 (14.6, 14.8, 14.9)
+    │   ├── FileNotFoundException     // 없는 파일 / 실행 파일
+    │   └── TimeoutException          // 소켓 시간 초과
     └── RuntimeException              (unchecked)
         ├── NullPointerException       // 후위 ! 단언 실패
         ├── ArithmeticException        // 오버플로, 0 나누기, 정수 음수 지수
         ├── ClassCastException         // castTo 실패
         ├── IndexOutOfBoundsException  // 배열 범위 초과
-        └── IllegalArgumentException
+        ├── IllegalArgumentException
+        ├── IllegalStateException      // 닫힌 파일/소켓 사용, 잘못된 순서의 호출
+        ├── UnsupportedOperationException
+        └── CryptographyException      // 복호화 실패(잘못된 키, 변조된 데이터) (14.11)
 ```
 
 ---
@@ -737,6 +762,18 @@ String owned = alice.name().clone()   // 소유권 있는 복제본
 ```
 - `setter`와 `Immutable`을 함께 쓰면 컴파일 에러.
 
+**체이닝 메서드**
+- 자기 클래스에 대한 변경 가능 참조 `*C`를 반환하는 메서드는 체이닝 메서드다. 본문에서 `return this`로 자기 자신을 돌려준다. `setter.chain` 접근자도 체이닝 메서드다.
+- 체이닝 메서드를 **임시 객체**(변수나 필드가 아닌 값, 예: `new C()`나 다른 체이닝 호출의 결과)에 호출하면, 결과는 그 객체 자체(소유권 있는 값)다. 그래서 빌더 체인의 결과를 변수에 담을 수 있다.
+- 변수에 호출하면 그 변수에서 빌린 `*C`를 돌려준다 (`alice.name("A").age(3)`).
+```
+public class Task {
+    private setter.chain String name = ""
+    public function *Task run() { ...; return this }
+}
+Task t = new Task().name("job").run()      // t는 그 임시 객체를 소유한다
+```
+
 ### 10.7 `toString` 프로토콜
 ```
 public class Point3 extends Point {
@@ -807,6 +844,8 @@ f"{s!r}"              // 변환: !r (따옴표 붙은 형식), !s (표시 형식
 | `.append(a)` / `.prepend(a)`                       | 앞/뒤에 추가                      | 변경 |
 | `.equals(other)`                                   | 값 비교 (`==`와 동일)             |      |
 | `.clone()`                                         | 복제 (copy-on-write)              |      |
+| `.encode()` / `.encode(encoding)`                  | 텍스트를 `Bytes`로 (기본 UTF-8, 14.5) |      |
+| `.toJson()`                                        | JSON 문자열 표현 (14.5)           |      |
 
 - 변경 메서드는 `Immutable String`에 호출할 수 없다.
 
@@ -822,6 +861,7 @@ f"{s!r}"              // 변환: !r (따옴표 붙은 형식), !s (표시 형식
 | `Int.max(a, b, ...)` / `Int.min(a, b, ...)`                 | `Int` 클래스 전용, 모든 숫자 타입 인자 허용        |
 | `.random(start, end)`                                       | 시작 포함, 끝 미포함 무작위 값                     |
 | `.range(start, end, step)`                                  | 범위                                               |
+| `T.fromBytes(&bytes)` / `T.fromBytes(&bytes, order)`        | 바이트에서 숫자로 (14.5)                           |
 
 ### 12.2 인스턴스 메서드
 | 메서드                                        | 설명                                     |
@@ -835,6 +875,7 @@ f"{s!r}"              // 변환: !r (따옴표 붙은 형식), !s (표시 형식
 | `.string()`                                   | 문자열 변환                              |
 | `.castTo(T)`                                  | 명시적 타입 변환                         |
 | `.addWrap(b)` / `.subWrap(b)` / `.mulWrap(b)` | 정책 무관 순환 연산                      |
+| `.toBytes()` / `.toBytes(order)`              | 타입 크기의 바이트 (`"big"` 기본 / `"little"`, 14.5) |
 
 **반올림 규칙**
 ```
@@ -890,6 +931,40 @@ arr[-1] = 5            // arr.set(-1, 5)
 | `.remove(index)`        | 제거하고 그 값을 소유권과 함께 반환          | 금지        | 금지               |
 | `.equals(other)`        | 값 비교 (`==`와 동일)                        | 허용        | 허용               |
 | `.clone()`              | 복제 (copy-on-write)                         | 허용        | 허용               |
+| `.add(v)` / `.append(v)` / `.push(v)` | 끝에 추가 (세 이름은 같다)     | 금지        | 금지               |
+| `.addAll(&other)`       | 다른 배열의 원소를 끝에 추가 (복제)          | 금지        | 금지               |
+| `.pop()`                | 마지막 원소를 제거하고 소유권과 함께 반환    | 금지        | 금지               |
+| `.clear()`              | 모두 제거                                    | 금지        | 금지               |
+| `.swap(i, j)`           | 두 원소 교환                                 | 금지        | 허용               |
+| `.sortBy(cmp)`          | 비교 함수로 안정 정렬                        | 금지        | 허용               |
+| `.slice(from)` / `.slice(from, to)` | `[from, to)` 구간의 새 배열 (음수는 끝에서부터) | 허용 | 허용      |
+| `.indexOf(v)` / `.lastIndexOf(v)` | 처음 / 마지막 위치, 없으면 `-1`   | 허용        | 허용               |
+| `.contains(v)`          | 포함 여부                                    | 허용        | 허용               |
+| `.concat(&other)`, `a + b` | 이어 붙인 새 배열                         | 허용        | 허용               |
+| `.join(sep)`            | 원소의 문자열 표현을 `sep`으로 연결 (기본 `", "`) | 허용   | 허용               |
+| `.map(f)`               | 각 원소에 `f`를 적용한 새 배열               | 허용        | 허용               |
+| `.filter(f)`            | `f`가 `true`인 원소만 담은 새 배열           | 허용        | 허용               |
+| `.reduce(init, f)`      | `acc = f(acc, v)`를 차례로 적용한 결과       | 허용        | 허용               |
+| `.forEach(f)`           | 각 원소에 `f` 실행                           | 허용        | 허용               |
+| `.find(f)` / `.findIndex(f)` | `f`가 `true`인 첫 원소(`T?`) / 위치(없으면 `-1`) | 허용 | 허용          |
+| `.any(f)` / `.all(f)` / `.count(f)` | 하나라도 / 모두 / 개수            | 허용        | 허용               |
+| `.toJson()`             | JSON 문자열 표현 (14.5)                      | 허용        | 허용               |
+
+**고차 메서드**
+```
+Int64[] xs = [5, 3, 8]
+xs.map((x) -> x * 10)                      // [50, 30, 80]
+xs.filter((i, x) -> i > 0 and x > 3)       // [8]   (index, value)
+xs.reduce(0, (acc, x) -> acc + x)          // 16
+xs.sortBy((a, b) -> b - a)                 // [8, 5, 3]
+items.map((it) -> it.name.clone())         // 객체 원소는 빌려서 전달
+```
+- 함수는 `(value)` 또는 `(index, value)`를 받는다 (`reduce`는 `(acc, value)` 또는 `(acc, index, value)`, `sortBy`는 `(a, b)`). `index`는 `Int64`.
+- 원소 전달: 매개변수 타입을 생략하면 복사 타입 원소는 값으로, 이동 타입 원소는 `&T`로 빌려서 전달한다. `&T`라고 쓰면 빌려서, `T`라고 쓰면 (이동 타입은 복제본을) 값으로 전달한다.
+- `filter`, `find`, `findIndex`, `any`, `all`, `count`의 함수는 `Boolean`을 반환해야 한다. `filter`와 `find`는 이동 타입 원소의 복제본을 담는다.
+- `reduce`의 누적값 타입은 `init`의 타입이다. 숫자 리터럴 `init`은 원소가 숫자면 원소 타입, 아니면 `Int64` / `Float64`가 된다.
+- `sortBy`의 비교 함수는 정수(음수: `a`가 앞, 0: 같음, 양수: `b`가 앞)를 반환한다. 정렬은 안정적이다.
+- 구현 노트: 숫자와 `Boolean` 배열은 원소를 박싱하지 않고 연속된 메모리에 저장한다 (`UInt8[]`는 바이트 배열). 다른 타입의 값이 들어오면 일반 표현으로 바뀌며, 프로그램에서 보이는 동작은 같다.
 
 - `.at()`, `.first()`, `.last()`의 반환은 getter와 같은 규칙을 따른다: 복사 타입 원소는 값 복사, 이동 타입 원소는 `&T` 참조.
 - `first(k)`는 `at(k)`와, `last(k)`는 `at(-1 - k)`와 같다. 예) `last()` == `at(-1)`, `last(1)` == `at(-2)`.
@@ -963,6 +1038,192 @@ a.forEachRow((Vector row) -> row * 2.0)
 - **멀티스레드**: `allowMultithreading`(기본 `false`)과 `maxWorkerThreads`(기본 `0` = 코어 수) 속성으로 제어한다 (`t.allowMultithreading(true).maxWorkerThreads(4)`). 켜면 큰 텐서(약 3만 2천 회 이상의 요소 연산)의 행렬 곱, 요소별 산술, 반올림, 타입 변환을 런타임이 여러 스레드로 나누어 계산한다. 각 결과 요소의 계산 순서가 같으므로 결과와 예외는 스레드 사용 여부와 무관하게 동일하다. 연산 결과는 왼쪽 피연산자의 설정을 물려받는다. 람다(`forEach*`, `map`)는 항상 호출한 스레드에서 순서대로 실행된다.
 - `toString()`은 numpy처럼 열을 맞춘 중첩 대괄호로 출력한다. `==`는 모양과 모든 요소가 같을 때 참이다.
 
+### 14.5 `Bytes`, 텍스트 인코딩, JSON
+`Bytes`(프렐류드)는 바이트 열이다. 내부는 `UInt8[]`이며 바이트 단위로 연속 저장된다.
+```
+Bytes b = "héllo".encode()             // UTF-8 (기본)
+String s = b.decode()                  // 올바른 UTF-8이 아니면 IllegalArgumentException
+String h = b.toHex()                   // "68c3a96c6c6f"
+String t = b.toBase64()                // toBase64(true): URL-safe, 패딩 없음
+Bytes c = Bytes.fromHex(h) + Bytes.fromBase64(t)
+Bytes k = Bytes.random(32)             // 운영체제의 보안 난수
+Int32 n = 258
+Bytes nb = n.toBytes()                 // 00000102 (big endian), toBytes("little")
+Int32 m = Int32.fromBytes(&nb)
+Dictionary[String, DTVariable] obj = {"a": [1, 2]}
+String json = obj.toJson()            // toJson(2): 들여쓰기
+DTVariable v = data.Json.parse(json)
+```
+- 방향은 항상 같다: `encode`는 `String` → `Bytes`, `decode`는 `Bytes` → `String`. 이진 데이터(암호문, 해시 등)를 텍스트로 나타낼 때는 `toHex()` / `toBase64()`를 쓴다.
+- 인코딩: `"utf-8"`, `"utf-16le"`, `"utf-16be"`, `"ascii"`, `"latin-1"` (대소문자, `-` 무시). 표현할 수 없는 문자나 잘못된 바이트는 `IllegalArgumentException`.
+- `Bytes` 메서드: `length`, `isEmpty`, `b[i]`, `b[i] = v`, `+`, `slice`, `append`, `indexOf`, `decode`, `toHex`, `toBase64`, `toArray`, `equalsConstantTime`(비밀 값 비교용), `==`(내용 비교), 정적 `zeros`, `fromHex`, `fromBase64`, `random`.
+- `toBytes` / `fromBytes`: 타입 크기만큼의 2의 보수(정수) 또는 IEEE 754(실수) 표현. `IntLarge`는 최소 길이 2의 보수. `fromBytes`의 길이가 맞지 않으면 `IllegalArgumentException`.
+- JSON: 객체 → `Dictionary[String, DTVariable]`, 배열 → `DTVariable[]`, 정수 → `Int64`(넘치면 `IntLarge`), 그 밖의 수 → `Float64`, `null` → `Null`. `toJson`은 문자열, 숫자, `Boolean`, 배열, `Dictionary`, 튜플을 지원하며 객체와 NaN/무한대는 `IllegalArgumentException`. `data.Json.stringify(&v)` / `stringify(&v, indent)`도 같다.
+
+### 14.6 `system`: 프로세스, 셸, 플랫폼별 작업
+```
+using system.*
+
+ShellResult r = System.shell("dir *.txt | sort")   // 문자열: 플랫폼 셸(cmd.exe, /bin/sh)이 해석
+ShellResult a = System.shell(["git", "status"])    // 배열: 셸 없이 프로그램과 인자를 그대로 실행
+System.shell(["make"], true)                        // 출력을 콘솔에도 보여 준다
+r.exitCode()  r.stdout()  r.stderr()  r.isSuccess()
+
+System.sleep(500)          // 밀리초 (Thread.sleep과 같다), System.sleep(&Duration)
+System.env("PATH")         // String?, setEnv / removeEnv / envAll
+System.os()                // "windows", "mac", "linux", ...  arch(), cpuCount(), pid()
+System.exit(0)             // 출력을 비우고 종료
+Threads.main.exit(0)       // 같다, Threads.main.kill(1)은 출력을 비우지 않고 즉시 종료
+```
+- **셸 주입**: 문자열 하나를 넘기면 셸이 해석하므로 파이프, 리다이렉션, 와일드카드를 쓸 수 있지만 문자열에 끼워 넣은 값이 명령으로 해석될 수 있다. 외부 입력은 배열 형태로 넘긴다.
+- 실행할 프로그램이 없으면 `FileNotFoundException`. 명령의 실패는 예외가 아니라 0이 아닌 `exitCode()`다.
+
+**PlatformTask**: 운영체제별로 다른 명령이나 동작을 하나의 작업으로 기술한다.
+```
+PlatformTask task = new PlatformTask()
+    .description("My task")                         // 선택
+    .id("my-task")                                  // 선택
+    .windows(["cmd", "/c", "dir"])                  // 프로그램과 인자 (셸 없음)
+    .mac(["ls", "-l"])
+    .linux(["ls", "-l"])
+    .otherOS((&Platform p) -> {                     // 그 밖의 운영체제
+        switch (p) {
+            case p.systemName == "freebsd":
+                p.shell(["ls", "-l"])
+            default:
+                Threads.main.exit(1)
+        }
+    })
+    .printToConsole(true)                           // 실행 중 출력도 보여 준다 (기본 false)
+    .execute()                                      // 명령을 시작하고 바로 반환
+task.wait()
+Int64 code = task.exitCode()
+String out = task.stdout()
+String err = task.stderr()
+
+new PlatformTask().windows(() -> { ... }).mac(() -> { ... }).linux(() -> { ... }).execute()
+```
+- `windows`, `mac`, `linux`는 명령(`String[]`) 또는 동작(`Function[(), void]`)을 받는다. `windowsPowerShell([...])`은 단어들을 이어 `powershell -Command`로 실행하며 `windows()`와 함께 쓰면 `IllegalStateException`.
+- 현재 운영체제에 해당하는 것이 없으면 `otherOS`의 동작을 실행한다. 그 안에서 `p.shell(...)`로 실행한 마지막 명령의 결과가 작업의 결과가 된다. 아무것도 없으면 `UnsupportedOperationException`.
+- 명령은 `execute()`에서 시작되어 백그라운드에서 실행되고, `wait()` / `exitCode()` / `stdout()` / `stderr()`가 끝날 때까지 기다린다. `isDone()`, `kill()`. 동작(람다)은 `execute()` 안에서 실행된다.
+- `executePromise(&Promise)`와 `Promise`는 멀티스레딩이 도입될 때 구현한다. 지금은 `UnsupportedOperationException`.
+- `Platform`: `systemName`, `family`(`"windows"` / `"unix"`), `architecture`, `isWindows()`, `isMac()`, `isLinux()`, `isUnix()`, `shell(...)`.
+- `Threads`: 지금은 단일 스레드 `Threads.main`(`Thread`: `id()`, `name()`, `sleep(ms)`, `exit(code)`, `kill(code)`)만 있다.
+
+### 14.7 `time`: 시간과 날짜
+```
+using time.*
+Duration d = Duration.ofMinutes(2) + Duration.ofMillis(1500)   // "2m1.5s"
+Instant t0 = Instant.now()                  // 단조 시계
+Duration took = t0.elapsed()
+DateTime now = DateTime.now()               // 지역 시간, DateTime.utcNow()
+DateTime t = DateTime.of(2026, 10, 7, 9, 30, 0)
+DateTime u = DateTime.parse("2026-10-07T09:30:00+09:00")   // ISO-8601
+DateTime v = DateTime.parse("07/10/2026 23:59", "dd/MM/yyyy HH:mm")
+t.format("EEEE, MMMM d, yyyy h:mm a")       // "Wednesday, October 7, 2026 9:30 AM"
+t.plusMonths(1)  t.plusDays(3)  t + d  u - t  t.toUtc()  t.withOffset(3600)
+```
+- `Duration`: 나노초 정밀도. `of*` / `to*`(`toMillis`, `toSeconds` 등 절삭), `asSeconds()`(실수), `+ - * /`, 비교, `toString()`은 `1h2m3.5s`, `1.5ms`, `250µs` 형식.
+- `Instant`: 경과 시간 측정용 단조 시계. 프로그램 실행 안에서만 의미가 있다.
+- `DateTime`: 밀리초 정밀도의 날짜와 시각 + 고정 UTC 오프셋. 지역 시간의 오프셋은 운영체제의 시간대 규칙을 따른다. 그레고리력을 모든 연도에 적용한다. 필드: `year`, `month`(1~12), `day`, `hour`, `minute`, `second`, `millisecond`, `dayOfWeek`(1=월요일), `dayOfYear`, `epochMillis`, `offsetSeconds`. `==`는 같은 순간인지 비교한다.
+- 형식 패턴: `yyyy yy MMMM MMM MM M dd d HH H hh h mm m ss s SSS a EEEE EEE XXX xxx Z`, 작은따옴표 안은 글자 그대로. 잘못된 날짜나 형식은 `IllegalArgumentException`. 오프셋이 없는 텍스트는 지역 시간이다.
+- `sleep`은 `System.sleep` / `Thread.sleep`에 있다 (14.6).
+
+### 14.8 `io`: 파일, 디렉터리, 경로
+```
+using io.*
+String text = File.readText("notes.txt")          // readLines, readBytes
+File.writeText("out.txt", "hello\n")              // appendText, writeLines, writeBytes, appendBytes
+File f = File.open("log.txt", "a")                // "r" | "w" | "a" | "rw"
+f.writeLine("started")
+for (String? line = f.readLine(); line != null; line = f.readLine()) { ... }
+f.close()                                         // 마지막 참조가 사라질 때도 닫힌다
+Directory.create("build/out")  Directory.list(".")  Directory.walk("src")  Directory.delete("tmp", true)
+Path.join("dir", "a.txt")  Path.extension("a.tar.gz")  Path.absolute(".")  Path.normalize("a/../b")
+```
+- 열린 파일: `read(n)`, `readAll()`, `readText()`, `readLine()`, `write(&Bytes)`, `write(String)`, `writeLine`, `seek(pos)`(음수는 끝에서부터), `position()`, `length()`, `flush()`, `close()`, `isOpen()`. 닫힌 파일을 쓰면 `IllegalStateException`.
+- 정적 메서드: `File.exists/size/lastModified/delete/copy/move`, `Directory.exists/current/setCurrent/temp/home`, `Path.parent/fileName/stem/extension/separator/exists/isFile/isDirectory`.
+- 없는 파일은 `FileNotFoundException`, 그 밖의 실패는 `IOException`.
+- 파일, 소켓, 난수 생성기 같은 자원 객체를 `.clone()`하면 같은 운영체제 자원을 공유한다.
+
+### 14.9 `net`: TCP, UDP, HTTP
+```
+using net.*
+TcpServer server = new TcpServer("127.0.0.1", 8080)   // new TcpServer(0): 빈 포트, server.port()
+TcpSocket client = new TcpSocket("example.com", 80)   // (host, port, timeoutMillis)
+client.writeLine("hello")   client.readLine()   client.read(1024)   client.readAll()
+TcpSocket conn = server.accept()
+UdpSocket u = new UdpSocket()     u.send("ping", "127.0.0.1", 9000)     UdpPacket p = u.receive(1500)
+HttpResponse r = Http.get("https://example.com/")
+r.status()  r.header("content-type")  r.text()  r.json()  r.body()
+Http.post(url, "text")  Http.postJson(url, &value)  Http.request("PUT", url, headers, body, timeoutMillis)
+```
+- 읽기와 쓰기는 블로킹이다. `setTimeout(ms)` 후 시간이 지나면 `TimeoutException`. 연결 실패는 `IOException`.
+- HTTP 클라이언트는 `http://`와 `https://`(TLS)를 지원하고 리다이렉트를 5번까지 따라간다. 404, 500 같은 상태는 예외가 아니라 응답이다. 헤더 이름은 소문자.
+- 동시에 여러 연결을 처리하는 서버는 멀티스레딩 도입 후 지원한다.
+
+### 14.10 `math.Random`
+```
+using math.Random as Random
+Random r = new Random()            // 운영체제 난수로 시드: 예측 불가
+Random t = new Random(seed=42)     // 같은 수열을 반복 (테스트, 시뮬레이션)
+r.nextInt(10)  r.nextInt(-5, 5)  r.nextInt64()  r.nextFloat()  r.nextFloat(1.0, 2.0)
+r.nextBoolean()  r.nextGaussian()  r.nextBytes(16)  r.choose(["a", "b"])  r.shuffle(*arr)
+```
+- ChaCha20 생성기를 쓴다. 시드를 준 생성기는 시드를 아는 사람에게 예측 가능하므로 키와 비밀 값에는 `new Random()` 또는 `Bytes.random(n)`을 쓴다.
+
+### 14.11 `crypto`: 해시, 대칭/비대칭 암호화
+```
+using crypto.*
+HashDigest d = new HashDigest(algorithm="SHA-512")
+String hex = d.digest("data").toHex()           // digest(&Bytes), hexDigest(...), update/finish, hmac(key, data)
+
+SymmetricCryptography c = new SymmetricCryptography(algorithm="AES-256")
+String sealed = c.encrypt(plain="secret", key="my-secret-key")         // base64 텍스트
+String opened = c.decrypt(encrypted=sealed, key="my-secret-key")
+Bytes box = c.encrypt(plain=data, key=keyBytes, salt=saltBytes)        // 이진 데이터, salt는 선택
+
+AsymmetricCryptography ac = new AsymmetricCryptography(algorithm="RSA")
+Random r = new Random()
+pk, sk = ac.deriveKeySet(random=&r)             // 또는 deriveKeySet()
+Bytes enc = ac.encrypt(plain="hi".encode(), key=&pk)
+String txt = ac.decrypt(encrypted=enc, key=&sk).decode()
+Bytes sig = ac.sign(data, key=&sk)      Boolean ok = ac.verify(data, sig, key=&pk)
+String pem = pk.toPem()                  PublicKey.fromPem(pem), PrivateKey.fromPem(...)
+```
+- 해시: SHA-224/256/384/512, SHA3-224/256/384/512, 그리고 옛 형식 호환용 MD5, SHA-1 (보안 용도로는 쓰지 않는다).
+- 대칭 암호: `AES-128`, `AES-192`, `AES-256`(GCM 모드), `ChaCha20-Poly1305`. 모두 인증 암호화(AEAD)이며 메시지마다 새 난수 nonce를 쓴다. 키가 틀리거나 데이터가 바뀌면 `CryptographyException`.
+- 키: 기본(`keyDerivation("pbkdf2")`)은 `key`를 비밀번호로 보고 PBKDF2-HMAC-SHA256(`iterations`, 기본 600000)과 salt로 실제 키를 만든다. salt를 주지 않으면 16바이트 난수를 쓴다. salt와 반복 횟수는 출력에 함께 저장되므로 복호화에는 키만 있으면 된다. `keyDerivation("none")`이면 `key`를 그대로 쓰며 길이가 `keySize()`와 같아야 한다 (`generateKey()`).
+- 출력 형식: `"L2C"`, 버전, 알고리즘, 키 유도 방식, 반복 횟수, salt, nonce, 암호문과 태그. nonce 앞의 헤더 전체가 인증된다.
+- 비대칭: RSA (`"RSA"` = 3072비트, `"RSA-2048"`, `"RSA-3072"`, `"RSA-4096"`). 암호화는 OAEP-SHA256 (한 번에 키 바이트 수 - 66 바이트까지: 큰 데이터는 대칭 키를 암호화한다), 서명은 PSS-SHA256. 키는 PEM(PKCS#8, SPKI, PKCS#1)으로 저장하고 읽는다. 시드를 준 `Random`으로 만든 키는 재현 가능하므로 테스트에만 쓴다.
+- 텍스트 오버로드: `encrypt(String, ...)`는 UTF-8로 암호화한 결과를 base64 텍스트로, `decrypt(String, ...)`는 그 반대로 처리한다. 암호문은 올바른 UTF-8이 아니므로 `.decode()` 대신 base64나 hex로 다룬다.
+- `KeyDerivation.pbkdf2(...)`, `KeyDerivation.hkdf(...)`: 키 유도 함수를 직접 쓴다.
+- 구현 노트: RustCrypto 크레이트(`sha2`, `sha3`, `aes-gcm`, `chacha20poly1305`, `rsa` 등)를 감싼다.
+
+### 14.12 `data.collections`
+```
+using data.collections.*
+Set[String] s = new Set[String](["a", "b"])      // add, remove, contains, union(+), difference(-), intersection
+Queue[Int64] q = new Queue[Int64]()              // enqueue, dequeue, peek
+Deque[Int64] d = new Deque[Int64]()              // pushFront, pushBack, popFront, popBack, peekFront, peekBack
+PriorityQueue[Int64] p = new PriorityQueue[Int64]()               // 작은 값 먼저
+PriorityQueue[Job] j = new PriorityQueue[Job]((&Job a, &Job b) -> a.priority - b.priority)
+```
+- 모두 `length`, `isEmpty`, `clear`, `toArray`(PriorityQueue는 `toSortedArray`), `toString`을 가진다. 빈 컬렉션에서 꺼내면 `IllegalStateException`.
+- `Set`은 삽입 순서를 유지한다. 문자열, 숫자, `Boolean`은 값으로, 객체는 동일성으로 구별한다.
+- `Queue`와 `Deque`의 추가/제거, `PriorityQueue`의 `add`/`poll`(이진 힙, O(log n))은 상각 상수 시간이다. `peek`류는 이동 타입 원소의 복제본을 돌려준다.
+- 리스트는 따로 없다: 배열이 가변 길이 리스트다 (13.3).
+
+### 14.13 SDK 설치
+```
+language-2 sdk install     // 이 툴체인과 런타임을 SDK <버전>으로 설치
+language-2 sdk list        // 설치된 SDK 버전
+language-2 sdk path        // SDK 홈
+```
+- SDK 홈: `$L2_HOME`, 기본값은 Windows `%LOCALAPPDATA%\language-2`, 그 밖에서는 `~/.language-2`.
+- 구조: `<홈>/sdk/<버전>/bin/language-2`(툴체인), `<홈>/sdk/<버전>/lib/<타깃 트리플>/`(정적·공유 런타임). 여러 버전이 나란히 설치된다.
+- 툴체인은 프로그램의 `@using sdk N`에 맞는 설치된 툴체인으로 명령을 넘기고 (2.3), `IncludeDependencies=false`로 만든 실행 파일은 해당 버전의 공유 런타임을 불러온다 (2.5).
+
 ---
 
 ## 15. 컴파일러 아키텍처
@@ -1000,5 +1261,8 @@ a.forEachRow((Vector row) -> row * 2.0)
 | 1    | 라이브러리 및 패키지 시스템         | 패키지·import·이름 해석(14.1, 14.3), `math.linear`(14.4) 완료. 외부 라이브러리 배포는 미정 |
 | 2    | 공유 소유권 타입 `Shared[T]`        | 참조 카운팅                               |
 | 3    | Dictionary 키로 사용할 수 있는 타입 | 클래스를 키로 쓸 때의 해시 규칙           |
-| 4    | 표준 라이브러리 전반                | 파일 입출력, 컬렉션(`List` 등), 수학 함수 |
+| 4    | 표준 라이브러리 전반                | 입출력, 네트워크, 시간, 암호화, 컬렉션, JSON 완료(14.5~14.12). 남은 것: 정규식, 수학 함수(`sqrt`, 삼각함수), 압축, 날짜의 IANA 시간대 이름 |
 | 5    | 사용자 정의 `Numeric` 타입           | 연산자 오버로딩한 클래스(복소수 등)를 `Tensor` 요소로 |
+| 6    | 멀티스레딩                          | `Thread` 생성, 채널/뮤텍스, `Promise`·`PlatformTask.executePromise` 구현, 동시 접속 서버 |
+| 7    | FFI와 `sys.win32`                   | C ABI 함수 호출(`extern`), 그 위의 운영체제 API 라이브러리 |
+| 8    | 공유 런타임 ABI 버전 검사            | 같은 SDK 버전 안에서 런타임과 실행 파일의 빌드가 다를 때 감지 |

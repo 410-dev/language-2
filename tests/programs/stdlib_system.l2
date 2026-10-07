@@ -1,0 +1,104 @@
+// system and time packages (spec 14.6, 14.7).
+// expect-exit: 3
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using system.*
+using time.*
+
+function void main() {
+    // shell: one string goes through the platform shell, an array runs a program directly
+    ShellResult r = System.shell("echo hello")
+    stdio.println(f"[{r.exitCode()}] {r.stdout().trim()} {r.isSuccess()}")
+    ShellResult bad = System.shell("exit 4")
+    stdio.println(f"exit {bad.exitCode()}")
+    try {
+        System.shell(["no-such-program-l2-test"])
+    } catch (FileNotFoundException e) {
+        stdio.println("missing program: FileNotFoundException")
+    }
+
+    System.setEnv("L2_TEST_VAR", "value 1")
+    stdio.println(System.env("L2_TEST_VAR"))
+    stdio.println(System.envAll().containsKey("L2_TEST_VAR"))
+    System.removeEnv("L2_TEST_VAR")
+    stdio.println(System.env("L2_TEST_VAR") ?? "unset")
+    stdio.println(System.cpuCount() > 0)
+    Platform p = System.platform()
+    stdio.println(p.systemName == System.os() and (p.isWindows() or p.isUnix()))
+
+    // one task, a command per platform
+    PlatformTask task = new PlatformTask()
+        .description("greeting")
+        .id("greet")
+        .windows(["cmd", "/c", "echo task-output"])
+        .mac(["echo", "task-output"])
+        .linux(["echo", "task-output"])
+        .otherOS((&Platform q) -> {
+            switch (q) {
+                case q.isUnix():
+                    q.shell(["echo", "task-output"])
+                default:
+                    Threads.main.exit(1)
+            }
+        })
+        .execute()
+    task.wait()
+    stdio.println(f"{task.exitCode()} {task.stdout().trim()} {task}")
+
+    PlatformTask actions = new PlatformTask()
+        .windows(() -> { stdio.println("action ran") })
+        .mac(() -> { stdio.println("action ran") })
+        .linux(() -> { stdio.println("action ran") })
+        .otherOS((&Platform q) -> { stdio.println("action ran") })
+        .execute()
+    stdio.println(f"{actions.isDone()} {actions.exitCode()}")
+    try {
+        new PlatformTask().windows(["a"]).windowsPowerShell(["b"])
+    } catch (IllegalStateException e) {
+        stdio.println(e.getMessage())
+    }
+    try {
+        new PlatformTask().id("empty").execute()
+    } catch (UnsupportedOperationException e) {
+        stdio.println(e.getMessage().startsWith("task 'empty' has nothing to run"))
+    }
+    try {
+        Promise pr = new Promise()
+        new PlatformTask().executePromise(&pr)
+    } catch (UnsupportedOperationException e) {
+        stdio.println("executePromise: not implemented yet")
+    }
+
+    // durations
+    Duration d = Duration.ofMinutes(2) + Duration.ofMillis(1500)
+    stdio.println(f"{d} {d.toMillis()} {d.asSeconds()} {d * 2} {-d} {Duration.ofNanos(1500)} {Duration.ofSeconds(0.25)}")
+    stdio.println(f"{Duration.ofSeconds(90) > Duration.ofMinutes(1)} {Duration.ofHours(1) / Duration.ofMinutes(15)}")
+
+    // dates at fixed offsets
+    DateTime t = DateTime.ofOffset(2026, 10, 7, 21, 5, 9, 9 * 3600)
+    stdio.println(t)
+    stdio.println(t.toUtc())
+    stdio.println(t.format("EEEE, MMMM d, yyyy 'at' h:mm a (XXX)"))
+    stdio.println(f"{t.year()}-{t.month()}-{t.day()} dow {t.dayOfWeek()} doy {t.dayOfYear()} ms {t.epochMillis()}")
+    DateTime leap = DateTime.parse("2024-01-31T12:00:00Z")
+    stdio.println(f"{leap.plusMonths(1)} {leap.plusYears(1).plusMonths(1)} {leap.plusDays(-31)}")
+    stdio.println(DateTime.parse("07/10/2026 23:59", "dd/MM/yyyy HH:mm").format("yyyy-MM-dd HH:mm"))
+    DateTime a = DateTime.parse("2026-01-01T00:00:00+09:00")
+    DateTime b = DateTime.parse("2025-12-31T15:00:00Z")
+    stdio.println(f"{a == b} {a.isBefore(&b)} {a - DateTime.parse("2025-12-31T00:00:00Z")}")
+    try {
+        DateTime.parse("2026-02-30", "yyyy-MM-dd")
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+    Instant start = Instant.now()
+    System.sleep(15)
+    stdio.println(start.elapsed() >= Duration.ofMillis(15))
+    stdio.println(System.currentTimeMillis() > 1700000000000)
+
+    stdio.println(Threads.current().name())
+    Threads.main.exit(3)
+    stdio.println("not reached")
+}

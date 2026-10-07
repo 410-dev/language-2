@@ -1,0 +1,5 @@
+// error: cannot call mutating method 'add'
+function void main() {
+    Immutable Int64[] xs = [1]
+    xs.add(2)
+}

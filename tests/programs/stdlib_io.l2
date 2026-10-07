@@ -1,0 +1,82 @@
+// io package: files, directories and paths (spec 14.8).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using io.*
+using system.System as System
+
+function void main() {
+    String root = Path.join(Directory.temp(), f"l2-io-test-{System.pid()}")
+    Directory.create(Path.join(root, "sub", "deeper"))
+    stdio.println(Directory.exists(root))
+
+    String notes = Path.join(root, "notes.txt")
+    File.writeText(notes, "first line\nsecond line\n")
+    File.appendText(notes, "third line\n")
+    stdio.println(File.readText(notes))
+    stdio.println(File.readLines(notes))
+    stdio.println(f"{File.exists(notes)} {File.size(notes)} bytes")
+
+    String bin = Path.join(root, "data.bin")
+    File.writeBytes(bin, &Bytes.fromHex("00ff7f"))
+    File.appendBytes(bin, &"!".encode())
+    stdio.println(File.readBytes(bin))
+
+    // open files: streams with a position
+    File f = File.open(notes)
+    stdio.println(f.readLine())
+    stdio.println(f.read(6).decode())
+    stdio.println(f.position())
+    f.seek(0)
+    stdio.println(f.readLine())
+    for (String? line = f.readLine(); line != null; line = f.readLine()) {
+        stdio.println(f"> {line!}")
+    }
+    stdio.println(f.readLine() ?? "end of file")
+    f.close()
+    stdio.println(f.isOpen())
+
+    File w = File.open(Path.join(root, "sub", "log.txt"), "w")
+    w.writeLine("one")
+    w.write("two ")
+    w.write(&"three".encode())
+    w.close()
+    File rw = File.open(Path.join(root, "sub", "log.txt"), "rw")
+    stdio.println(rw.readText())
+    rw.seek(-1)
+    rw.write("!")
+    rw.seek(0)
+    stdio.println(rw.readAll().decode())
+    stdio.println(rw.length())
+    rw.close()
+
+    File.copy(notes, Path.join(root, "copy.txt"))
+    File.move(Path.join(root, "copy.txt"), Path.join(root, "sub", "moved.txt"))
+    stdio.println(Directory.list(root))
+    stdio.println(Directory.walk(root).map((p) -> p.replace("\\", "/")))
+
+    stdio.println(Path.fileName("dir/report.final.txt"))
+    stdio.println(Path.stem("dir/report.final.txt"))
+    stdio.println(Path.extension("dir/report.final.txt"))
+    stdio.println(Path.parent("dir/report.final.txt"))
+    stdio.println(Path.extension("README") ?? "no extension")
+    stdio.println(Path.normalize("a/./b/../c").replace("\\", "/"))
+    stdio.println(Path.absolute(root) == Path.normalize(Path.absolute(root)))
+    stdio.println(Path.isFile(notes) and Path.isDirectory(root) and !Path.exists(Path.join(root, "nope")))
+
+    try {
+        File.readText(Path.join(root, "missing.txt"))
+    } catch (FileNotFoundException e) {
+        stdio.println("missing file: FileNotFoundException")
+    }
+    try {
+        Directory.delete(root)
+    } catch (IOException e) {
+        stdio.println("not empty: IOException")
+    }
+    File.delete(notes)
+    stdio.println(File.exists(notes))
+    Directory.delete(root, true)
+    stdio.println(Directory.exists(root))
+}

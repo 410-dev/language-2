@@ -1,0 +1,73 @@
+// data.collections: Set, Queue, Deque, PriorityQueue (spec 14.12).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using data.collections.*
+
+class Job {
+    public String name
+    public Int64 priority
+    public Job(String name, Int64 priority) {
+        this.name = name
+        this.priority = priority
+    }
+}
+
+function void main() {
+    Set[String] s = new Set[String](["b", "a", "b"])
+    stdio.println(f"{s} {s.length()} {s.add("c")} {s.add("a")} {s.contains("c")}")
+    Set[String] t = new Set[String](["c", "d"])
+    stdio.println(f"{s + t} {s - t} {s.intersection(&t)} {s.union(&t).length()}")
+    stdio.println(f"{s.remove("a")} {s.remove("zz")} {s.toArray()} {new Set[String](["c", "b"]) == s}")
+    Set[Int64] nums = new Set[Int64]()
+    for (i in Int64.range(0, 10)) {
+        nums.add(i % 3)
+    }
+    stdio.println(nums)
+
+    Queue[String] q = new Queue[String]()
+    q.enqueue("first")
+    q.enqueue("second")
+    stdio.println(f"{q.dequeue()} {q.peek()} {q.length()}")
+    q.enqueue("third")
+    stdio.println(q)
+    stdio.println(f"{q.dequeue()} {q.dequeue()} {q.isEmpty()}")
+    try {
+        q.dequeue()
+    } catch (IllegalStateException e) {
+        stdio.println(e.getMessage())
+    }
+
+    Deque[Int64] d = new Deque[Int64]()
+    for (i in Int64.range(1, 6)) {
+        d.pushBack(i)
+    }
+    d.pushFront(0)
+    stdio.println(f"{d} {d.popFront()} {d.popFront()} {d.popBack()} {d.peekFront()} {d.peekBack()}")
+    stdio.println(f"{d.popBack()} {d.popBack()} {d.popBack()} {d.length()}")
+
+    PriorityQueue[Int64] pq = new PriorityQueue[Int64]()
+    for (x in [5, 1, 8, 3, 9, 2, 7]) {
+        pq.add(x)
+    }
+    stdio.println(f"{pq.peek()} {pq.length()} {pq}")
+    Int64[] drained = Int64.array()
+    for (; !pq.isEmpty();) {
+        drained.add(pq.poll())
+    }
+    stdio.println(drained)
+
+    PriorityQueue[Job] jobs = new PriorityQueue[Job]((&Job a, &Job b) -> b.priority - a.priority)
+    jobs.add(new Job("low", 1))
+    jobs.add(new Job("high", 9))
+    jobs.add(new Job("mid", 5))
+    stdio.println(jobs.poll().name)
+    stdio.println(jobs.toSortedArray().map((j) -> j.name.clone()))
+
+    PriorityQueue[String] words = new PriorityQueue[String]()
+    words.add("pear")
+    words.add("apple")
+    words.add("fig")
+    stdio.println(words)
+}

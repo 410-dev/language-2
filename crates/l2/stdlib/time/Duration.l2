@@ -1,0 +1,137 @@
+@using sdk 1
+
+// time.Duration: a span of time with nanosecond precision (spec 14.7).
+
+using intrinsics as intr
+
+public class Duration {
+    private Immutable Int64 nanos
+
+    public Duration(Int64 nanos) {
+        this.nanos = nanos
+    }
+
+    public static function Duration ofNanos(Int64 n) {
+        return new Duration(n)
+    }
+
+    public static function Duration ofMicros(Int64 n) {
+        return new Duration(n * 1000)
+    }
+
+    public static function Duration ofMillis(Int64 n) {
+        return new Duration(n * 1000000)
+    }
+
+    public static function Duration ofSeconds(Int64 n) {
+        return new Duration(n * 1000000000)
+    }
+
+    public static function Duration ofSeconds(Float64 s) {
+        return new Duration((s * 1000000000.0).round().castTo(Int64))
+    }
+
+    public static function Duration ofMinutes(Int64 n) {
+        return new Duration(n * 60000000000)
+    }
+
+    public static function Duration ofHours(Int64 n) {
+        return new Duration(n * 3600000000000)
+    }
+
+    public static function Duration ofDays(Int64 n) {
+        return new Duration(n * 86400000000000)
+    }
+
+    public static function Duration zero() {
+        return new Duration(0)
+    }
+
+    public function Int64 toNanos() {
+        return nanos
+    }
+
+    public function Int64 toMicros() {
+        return nanos / 1000
+    }
+
+    public function Int64 toMillis() {
+        return nanos / 1000000
+    }
+
+    // whole seconds (truncated)
+    public function Int64 toSeconds() {
+        return nanos / 1000000000
+    }
+
+    public function Int64 toMinutes() {
+        return nanos / 60000000000
+    }
+
+    public function Int64 toHours() {
+        return nanos / 3600000000000
+    }
+
+    public function Int64 toDays() {
+        return nanos / 86400000000000
+    }
+
+    // seconds with a fraction
+    public function Float64 asSeconds() {
+        return nanos.castTo(Float64) / 1000000000.0
+    }
+
+    public function Boolean isZero() {
+        return nanos == 0
+    }
+
+    public function Boolean isNegative() {
+        return nanos < 0
+    }
+
+    public function Duration abs() {
+        return new Duration(nanos < 0 ? -nanos : nanos)
+    }
+
+    public function Duration operator+(&Duration other) {
+        return new Duration(nanos + other.nanos)
+    }
+
+    public function Duration operator-(&Duration other) {
+        return new Duration(nanos - other.nanos)
+    }
+
+    public function Duration operator-() {
+        return new Duration(-nanos)
+    }
+
+    public function Duration operator*(Int64 k) {
+        return new Duration(nanos * k)
+    }
+
+    public function Duration operator*(Float64 k) {
+        return new Duration((nanos.castTo(Float64) * k).round().castTo(Int64))
+    }
+
+    public function Duration operator/(Int64 k) {
+        return new Duration(nanos / k)
+    }
+
+    // how many times `other` fits
+    public function Float64 operator/(&Duration other) {
+        return nanos.castTo(Float64) / other.nanos.castTo(Float64)
+    }
+
+    public function Int32 compareTo(&Duration other) {
+        return nanos.compareTo(other.nanos)
+    }
+
+    public function Boolean equals(&Duration other) {
+        return nanos == other.nanos
+    }
+
+    // Go-style: 1h2m3.5s, 1.5ms, 250µs, 42ns
+    public function String toString() {
+        return intr.durationString(nanos)
+    }
+}

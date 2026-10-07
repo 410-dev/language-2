@@ -1,0 +1,178 @@
+@using sdk 1
+
+// io.File: whole-file helpers and open files (spec 14.8).
+//
+//     String text = File.readText("notes.txt")
+//     File.writeText("out.txt", "hello\n")
+//     File f = File.open("log.txt", "a")
+//     f.writeLine("started")
+//     f.close()                      // also closed when the last File value is dropped
+//
+// Missing files throw FileNotFoundException, other failures IOException.
+
+using intrinsics as intr
+using time.DateTime as DateTime
+
+public class File {
+    private DTVariable handle
+    private Immutable String filePath
+    private Immutable String fileMode
+
+    private File(&String path, &String mode) {
+        this.handle = intr.fileOpen(path, mode)
+        this.filePath = path.clone()
+        this.fileMode = mode.clone()
+    }
+
+    // ------------------------------------------------------------------ open files
+    // mode: "r" (read), "w" (write, truncating), "a" (append) or "rw" (read and write)
+    public static function File open(&String path, &String mode) {
+        return new File(path, mode)
+    }
+
+    public static function File open(&String path) {
+        return new File(path, "r")
+    }
+
+    public function String path() {
+        return filePath.clone()
+    }
+
+    public function String mode() {
+        return fileMode.clone()
+    }
+
+    // up to `n` bytes (fewer at the end of the file)
+    public function Bytes read(Int64 n) {
+        return new Bytes(intr.fileRead(handle, n))
+    }
+
+    // the rest of the file
+    public function Bytes readAll() {
+        return new Bytes(intr.fileRead(handle, -1))
+    }
+
+    // the rest of the file as UTF-8 text
+    public function String readText() {
+        return new Bytes(intr.fileRead(handle, -1)).decode()
+    }
+
+    // the next line without its line break; null at the end of the file
+    public function String? readLine() {
+        return intr.fileReadLine(handle)
+    }
+
+    public function void write(&Bytes data) {
+        intr.fileWrite(handle, data.toArray())
+    }
+
+    public function void write(&String text) {
+        intr.fileWrite(handle, intr.strEncode(text, "utf-8"))
+    }
+
+    public function void writeLine(&String text) {
+        intr.fileWrite(handle, intr.strEncode(text + "\n", "utf-8"))
+    }
+
+    // moves to a byte offset; negative offsets count from the end (-1 = end)
+    public function void seek(Int64 position) {
+        intr.fileSeek(handle, position)
+    }
+
+    public function Int64 position() {
+        return intr.filePosition(handle)
+    }
+
+    public function Int64 length() {
+        return intr.fileLength(handle)
+    }
+
+    public function void flush() {
+        intr.fileFlush(handle)
+    }
+
+    public function void close() {
+        intr.close(handle)
+    }
+
+    public function Boolean isOpen() {
+        return intr.isOpen(handle)
+    }
+
+    public function String toString() {
+        return f"File({filePath}, \"{fileMode}\"{intr.isOpen(handle) ? "" : ", closed"})"
+    }
+
+    // ------------------------------------------------------------------ whole files
+    public static function String readText(&String path) {
+        return intr.fsReadText(path, "utf-8")
+    }
+
+    public static function String readText(&String path, &String encoding) {
+        return intr.fsReadText(path, encoding)
+    }
+
+    public static function String[] readLines(&String path) {
+        String text = intr.fsReadText(path, "utf-8")
+        String[] lines = text.replace("\r\n", "\n").split("\n")
+        if (!lines.isEmpty() and lines.last() == "") {
+            lines.pop()
+        }
+        return lines
+    }
+
+    public static function Bytes readBytes(&String path) {
+        return new Bytes(intr.fsReadBytes(path))
+    }
+
+    public static function void writeText(&String path, &String text) {
+        intr.fsWriteText(path, text, "utf-8", false)
+    }
+
+    public static function void writeText(&String path, &String text, &String encoding) {
+        intr.fsWriteText(path, text, encoding, false)
+    }
+
+    public static function void appendText(&String path, &String text) {
+        intr.fsWriteText(path, text, "utf-8", true)
+    }
+
+    public static function void writeLines(&String path, &String[] lines) {
+        intr.fsWriteText(path, lines.join("\n") + "\n", "utf-8", false)
+    }
+
+    public static function void writeBytes(&String path, &Bytes data) {
+        intr.fsWriteBytes(path, data.toArray(), false)
+    }
+
+    public static function void appendBytes(&String path, &Bytes data) {
+        intr.fsWriteBytes(path, data.toArray(), true)
+    }
+
+    // ------------------------------------------------------------------ file system entries
+    public static function Boolean exists(&String path) {
+        return intr.fsIsFile(path)
+    }
+
+    public static function Int64 size(&String path) {
+        return intr.fsSize(path)
+    }
+
+    public static function DateTime lastModified(&String path) {
+        return DateTime.ofEpochMillis(intr.fsModified(path))
+    }
+
+    public static function void delete(&String path) {
+        intr.fsDelete(path)
+    }
+
+    // copies a file (or a whole directory)
+    public static function void copy(&String from, &String to) {
+        intr.fsCopy(from, to)
+    }
+
+    // renames / moves a file or directory
+    public static function void move(&String from, &String to) {
+        intr.fsMove(from, to)
+    }
+}

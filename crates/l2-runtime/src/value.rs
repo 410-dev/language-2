@@ -204,6 +204,10 @@ pub enum ExcKind {
     UseAfterFree,
     IO,
     StackOverflow,
+    FileNotFound,
+    Timeout,
+    IllegalState,
+    Crypto,
 }
 
 impl ExcKind {
@@ -218,9 +222,13 @@ impl ExcKind {
             ExcKind::UseAfterFree => "UseAfterFreeError",
             ExcKind::IO => "IOException",
             ExcKind::StackOverflow => "StackOverflowError",
+            ExcKind::FileNotFound => "FileNotFoundException",
+            ExcKind::Timeout => "TimeoutException",
+            ExcKind::IllegalState => "IllegalStateException",
+            ExcKind::Crypto => "CryptographyException",
         }
     }
-    pub const ALL: [ExcKind; 9] = [
+    pub const ALL: [ExcKind; 13] = [
         ExcKind::NullPointer,
         ExcKind::Arithmetic,
         ExcKind::ClassCast,
@@ -230,6 +238,10 @@ impl ExcKind {
         ExcKind::UseAfterFree,
         ExcKind::IO,
         ExcKind::StackOverflow,
+        ExcKind::FileNotFound,
+        ExcKind::Timeout,
+        ExcKind::IllegalState,
+        ExcKind::Crypto,
     ];
 }
 
@@ -242,8 +254,271 @@ pub struct Object {
 
 #[derive(Clone, Debug)]
 pub struct ArrayVal {
-    pub items: Vec<Value>,
+    pub items: Items,
     pub fixed: bool,
+}
+
+/// Array storage. Arrays whose elements all share one primitive type are stored unboxed
+/// (`UInt8[]` as bytes, other integers as `i64`, floats as `f64`, `Boolean` as `bool`); storing
+/// a value of another type falls back to boxed values. The representation is invisible to
+/// programs: every element still reads back as the same typed value.
+#[derive(Clone, Debug)]
+pub enum Items {
+    Vals(Vec<Value>),
+    U8(Vec<u8>),
+    /// Integers other than `UInt8`; `UInt64` values are stored as their bit pattern.
+    Int(IntTy, Vec<i64>),
+    Float(FloatTy, Vec<f64>),
+    Bool(Vec<bool>),
+}
+
+impl Default for Items {
+    fn default() -> Self {
+        Items::Vals(Vec::new())
+    }
+}
+
+fn int_bits(t: IntTy, x: i128) -> i64 {
+    if t == IntTy::U64 {
+        x as u64 as i64
+    } else {
+        x as i64
+    }
+}
+
+fn int_of_bits(t: IntTy, x: i64) -> i128 {
+    if t == IntTy::U64 {
+        x as u64 as i128
+    } else {
+        x as i128
+    }
+}
+
+impl Items {
+    /// Stores `vals`, unboxed when they all share one primitive type.
+    pub fn from_values(vals: Vec<Value>) -> Items {
+        let Some(first) = vals.first() else { return Items::Vals(vals) };
+        match first {
+            Value::Int(IntTy::U8, _) if vals.iter().all(|v| matches!(v, Value::Int(IntTy::U8, _))) => {
+                Items::U8(vals.iter().map(|v| if let Value::Int(_, x) = v { *x as u8 } else { 0 }).collect())
+            }
+            Value::Int(t, _) if vals.iter().all(|v| matches!(v, Value::Int(u, _) if u == t)) => {
+                let t = *t;
+                Items::Int(t, vals.iter().map(|v| if let Value::Int(_, x) = v { int_bits(t, *x) } else { 0 }).collect())
+            }
+            Value::Float(t, _) if vals.iter().all(|v| matches!(v, Value::Float(u, _) if u == t)) => {
+                Items::Float(*t, vals.iter().map(|v| if let Value::Float(_, x) = v { *x } else { 0.0 }).collect())
+            }
+            Value::Bool(_) if vals.iter().all(|v| matches!(v, Value::Bool(_))) => Items::Bool(vals.iter().map(|v| matches!(v, Value::Bool(true))).collect()),
+            _ => Items::Vals(vals),
+        }
+    }
+
+    /// `n` copies of `v`.
+    pub fn filled(v: &Value, n: usize) -> Items {
+        match Items::from_values(vec![v.clone()]) {
+            Items::Vals(_) => Items::Vals(vec![v.clone(); n]),
+            Items::U8(x) => Items::U8(vec![x[0]; n]),
+            Items::Int(t, x) => Items::Int(t, vec![x[0]; n]),
+            Items::Float(t, x) => Items::Float(t, vec![x[0]; n]),
+            Items::Bool(x) => Items::Bool(vec![x[0]; n]),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Items::Vals(v) => v.len(),
+            Items::U8(v) => v.len(),
+            Items::Int(_, v) => v.len(),
+            Items::Float(_, v) => v.len(),
+            Items::Bool(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The element at `i` (which must be in bounds).
+    pub fn get(&self, i: usize) -> Value {
+        match self {
+            Items::Vals(v) => v[i].clone(),
+            Items::U8(v) => Value::Int(IntTy::U8, v[i] as i128),
+            Items::Int(t, v) => Value::Int(*t, int_of_bits(*t, v[i])),
+            Items::Float(t, v) => Value::Float(*t, v[i]),
+            Items::Bool(v) => Value::Bool(v[i]),
+        }
+    }
+
+    pub fn try_get(&self, i: usize) -> Option<Value> {
+        (i < self.len()).then(|| self.get(i))
+    }
+
+    /// Whether `v` can be stored without boxing the array.
+    fn fits(&self, v: &Value) -> bool {
+        match (self, v) {
+            (Items::Vals(_), _) => true,
+            (Items::U8(_), Value::Int(IntTy::U8, _)) => true,
+            (Items::Int(t, _), Value::Int(u, _)) => t == u,
+            (Items::Float(t, _), Value::Float(u, _)) => t == u,
+            (Items::Bool(_), Value::Bool(_)) => true,
+            _ => false,
+        }
+    }
+
+    /// Boxed elements (converting the storage if needed).
+    pub fn vals_mut(&mut self) -> &mut Vec<Value> {
+        if !matches!(self, Items::Vals(_)) {
+            *self = Items::Vals(self.to_vec());
+        }
+        match self {
+            Items::Vals(v) => v,
+            _ => unreachable!(),
+        }
+    }
+
+    /// Prepares the storage for `v`: an empty boxed array takes the kind of its first value,
+    /// a packed array receiving another type is boxed.
+    fn adapt(&mut self, v: &Value) {
+        if matches!(self, Items::Vals(x) if x.is_empty()) {
+            *self = Items::from_values(vec![v.clone()]);
+            self.truncate(0);
+        } else if !self.fits(v) {
+            self.vals_mut();
+        }
+    }
+
+    pub fn set(&mut self, i: usize, v: Value) {
+        if !self.fits(&v) {
+            self.vals_mut();
+        }
+        match (self, v) {
+            (Items::Vals(x), v) => x[i] = v,
+            (Items::U8(x), Value::Int(_, n)) => x[i] = n as u8,
+            (Items::Int(t, x), Value::Int(_, n)) => x[i] = int_bits(*t, n),
+            (Items::Float(_, x), Value::Float(_, f)) => x[i] = f,
+            (Items::Bool(x), Value::Bool(b)) => x[i] = b,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn insert(&mut self, i: usize, v: Value) {
+        self.adapt(&v);
+        match (self, v) {
+            (Items::Vals(x), v) => x.insert(i, v),
+            (Items::U8(x), Value::Int(_, n)) => x.insert(i, n as u8),
+            (Items::Int(t, x), Value::Int(_, n)) => x.insert(i, int_bits(*t, n)),
+            (Items::Float(_, x), Value::Float(_, f)) => x.insert(i, f),
+            (Items::Bool(x), Value::Bool(b)) => x.insert(i, b),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn push(&mut self, v: Value) {
+        let n = self.len();
+        self.insert(n, v);
+    }
+
+    pub fn remove(&mut self, i: usize) -> Value {
+        let v = self.get(i);
+        match self {
+            Items::Vals(x) => return x.remove(i),
+            Items::U8(x) => {
+                x.remove(i);
+            }
+            Items::Int(_, x) => {
+                x.remove(i);
+            }
+            Items::Float(_, x) => {
+                x.remove(i);
+            }
+            Items::Bool(x) => {
+                x.remove(i);
+            }
+        }
+        v
+    }
+
+    pub fn truncate(&mut self, n: usize) {
+        match self {
+            Items::Vals(x) => x.truncate(n),
+            Items::U8(x) => x.truncate(n),
+            Items::Int(_, x) => x.truncate(n),
+            Items::Float(_, x) => x.truncate(n),
+            Items::Bool(x) => x.truncate(n),
+        }
+    }
+
+    pub fn reverse(&mut self) {
+        match self {
+            Items::Vals(x) => x.reverse(),
+            Items::U8(x) => x.reverse(),
+            Items::Int(_, x) => x.reverse(),
+            Items::Float(_, x) => x.reverse(),
+            Items::Bool(x) => x.reverse(),
+        }
+    }
+
+    pub fn swap(&mut self, i: usize, j: usize) {
+        match self {
+            Items::Vals(x) => x.swap(i, j),
+            Items::U8(x) => x.swap(i, j),
+            Items::Int(_, x) => x.swap(i, j),
+            Items::Float(_, x) => x.swap(i, j),
+            Items::Bool(x) => x.swap(i, j),
+        }
+    }
+
+    /// Elements `a..b` in the same representation.
+    pub fn slice(&self, a: usize, b: usize) -> Items {
+        match self {
+            Items::Vals(x) => Items::Vals(x[a..b].to_vec()),
+            Items::U8(x) => Items::U8(x[a..b].to_vec()),
+            Items::Int(t, x) => Items::Int(*t, x[a..b].to_vec()),
+            Items::Float(t, x) => Items::Float(*t, x[a..b].to_vec()),
+            Items::Bool(x) => Items::Bool(x[a..b].to_vec()),
+        }
+    }
+
+    /// Appends all elements of `other`.
+    pub fn extend(&mut self, other: &Items) {
+        match (&mut *self, other) {
+            (Items::U8(x), Items::U8(y)) => x.extend_from_slice(y),
+            (Items::Int(t, x), Items::Int(u, y)) if t == u => x.extend_from_slice(y),
+            (Items::Float(t, x), Items::Float(u, y)) if t == u => x.extend_from_slice(y),
+            (Items::Bool(x), Items::Bool(y)) => x.extend_from_slice(y),
+            _ => {
+                if self.is_empty() {
+                    *self = other.clone();
+                } else {
+                    for i in 0..other.len() {
+                        self.push(other.get(i));
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Value> + '_ {
+        (0..self.len()).map(move |i| self.get(i))
+    }
+
+    pub fn to_vec(&self) -> Vec<Value> {
+        match self {
+            Items::Vals(v) => v.clone(),
+            _ => self.iter().collect(),
+        }
+    }
+
+    /// The bytes of a `UInt8[]`.
+    pub fn bytes(&self) -> Option<std::borrow::Cow<'_, [u8]>> {
+        match self {
+            Items::U8(v) => Some(std::borrow::Cow::Borrowed(v)),
+            Items::Vals(v) if v.is_empty() => Some(std::borrow::Cow::Borrowed(&[])),
+            Items::Vals(v) => v.iter().map(|x| if let Value::Int(IntTy::U8, n) = x { Some(*n as u8) } else { None }).collect::<Option<Vec<u8>>>().map(std::borrow::Cow::Owned),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -333,7 +608,7 @@ impl RefTarget {
             RefTarget::Cell(c) => c.borrow().clone(),
             RefTarget::Field(o, i) => o.fields.borrow()[*i].clone(),
             RefTarget::Elem(pk) => match pk.0.get() {
-                Value::Array(a) => a.items.get(pk.1.as_int() as usize).cloned().unwrap_or(Value::Null),
+                Value::Array(a) => a.items.try_get(pk.1.as_int() as usize).unwrap_or(Value::Null),
                 Value::Dict(d) => d.get(&pk.1).cloned().unwrap_or(Value::Null),
                 _ => Value::Null,
             },
@@ -363,9 +638,12 @@ impl RefTarget {
                 Value::Array(a) => {
                     let m = Rc::make_mut(a);
                     let i = pk.1.as_int() as usize;
-                    let mut x = std::mem::replace(&mut m.items[i], Value::Void);
+                    let mut x = match &mut m.items {
+                        Items::Vals(v) => std::mem::replace(&mut v[i], Value::Void),
+                        other => other.get(i),
+                    };
                     f(&mut x);
-                    m.items[i] = x;
+                    m.items.set(i, x);
                 }
                 Value::Dict(d) => {
                     let m = Rc::make_mut(d);
@@ -408,6 +686,9 @@ pub enum Value {
     Ref(RefTarget),
     /// Raw pointer-sized payload used by the native runtime (closure environments).
     Raw(usize),
+    /// An operating-system resource (file, socket, process, random generator, key...) owned by
+    /// the standard library; released when the last reference is dropped.
+    Handle(Rc<crate::sys::Handle>),
 }
 
 impl Value {
@@ -421,7 +702,13 @@ impl Value {
         Value::Int(IntTy::I64, v as i128)
     }
     pub fn array(items: Vec<Value>, fixed: bool) -> Value {
+        Value::Array(Rc::new(ArrayVal { items: Items::from_values(items), fixed }))
+    }
+    pub fn packed(items: Items, fixed: bool) -> Value {
         Value::Array(Rc::new(ArrayVal { items, fixed }))
+    }
+    pub fn bytes(b: Vec<u8>) -> Value {
+        Value::packed(Items::U8(b), false)
     }
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
@@ -480,6 +767,7 @@ impl Value {
             Value::Closure(_) => "Function".into(),
             Value::Ref(_) => "Reference".into(),
             Value::Raw(_) => "Raw".into(),
+            Value::Handle(h) => h.kind().into(),
         }
     }
 }

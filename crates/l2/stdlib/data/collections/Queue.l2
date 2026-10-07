@@ -1,0 +1,71 @@
+@using sdk 1
+
+// data.collections.Queue: first in, first out (spec 14.12). enqueue and dequeue take amortized
+// constant time.
+
+public class Queue[T] {
+    // newest values at the end
+    private T[] inbox
+    // oldest value at the end
+    private T[] outbox
+
+    public Queue() {
+        this.inbox = T.array()
+        this.outbox = T.array()
+    }
+
+    public function void enqueue(T value) {
+        inbox.add(value)
+    }
+
+    // removes and returns the oldest value; IllegalStateException when empty
+    public function T dequeue() {
+        refill()
+        if (outbox.isEmpty()) {
+            throw IllegalStateException("dequeue from an empty queue")
+        }
+        return outbox.pop()
+    }
+
+    // the oldest value without removing it (a copy for objects and strings)
+    public function T peek() {
+        refill()
+        if (outbox.isEmpty()) {
+            throw IllegalStateException("peek at an empty queue")
+        }
+        return outbox.last().clone()
+    }
+
+    private function void refill() {
+        if (outbox.isEmpty()) {
+            for (; !inbox.isEmpty();) {
+                outbox.add(inbox.pop())
+            }
+        }
+    }
+
+    public function Int64 length() {
+        return inbox.length() + outbox.length()
+    }
+
+    public function Boolean isEmpty() {
+        return inbox.isEmpty() and outbox.isEmpty()
+    }
+
+    public function void clear() {
+        inbox.clear()
+        outbox.clear()
+    }
+
+    // oldest first
+    public function T[] toArray() {
+        T[] out = outbox.clone()
+        out.reverse()
+        out.addAll(inbox)
+        return out
+    }
+
+    public function String toString() {
+        return f"Queue{toArray()}"
+    }
+}

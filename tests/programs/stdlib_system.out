@@ -1,0 +1,27 @@
+[0] hello true
+exit 4
+missing program: FileNotFoundException
+value 1
+true
+unset
+true
+true
+0 task-output PlatformTask 'greet' (exit code 0)
+action ran
+true 0
+windowsPowerShell() conflicts with windows(); set only one of them
+true
+executePromise: not implemented yet
+2m1.5s 121500 121.5 4m3s -2m1.5s 1.5µs 250ms
+true 4.0
+2026-10-07T21:05:09.000+09:00
+2026-10-07T12:05:09.000Z
+Wednesday, October 7, 2026 at 9:05 PM (+09:00)
+2026-10-7 dow 3 doy 280 ms 1791374709000
+2024-02-29T12:00:00.000Z 2025-02-28T12:00:00.000Z 2023-12-31T12:00:00.000Z
+2026-10-07 23:59
+true false 15h0m0s
+cannot parse "2026-02-30" with pattern "yyyy-MM-dd": day 30 out of range for 2026-02
+true
+true
+main

@@ -184,8 +184,8 @@
     "types": {
       "patterns": [
         { "name": "storage.type.primitive.l2", "match": "\\b(void|Boolean|Byte|Int|Int8|Int16|Int32|Int64|IntLarge|UInt|UInt8|UInt16|UInt32|UInt64|Float|Float16|Float32|Float64)\\b" },
-        { "name": "support.type.l2", "match": "\\b(String|Dictionary|Function|DTVariable|STVariable|Droppable|Comparable|Numeric|List)\\b" },
-        { "name": "support.class.exception.l2", "match": "\\b(Throwable|Error|Exception|RuntimeException|IOException|NullPointerException|ArithmeticException|ClassCastException|IndexOutOfBoundsException|IllegalArgumentException)\\b" },
+        { "name": "support.type.l2", "match": "\\b(String|Dictionary|Function|DTVariable|STVariable|Droppable|Comparable|Numeric|Bytes|List)\\b" },
+        { "name": "support.class.exception.l2", "match": "\\b(Throwable|Error|Exception|RuntimeException|IOException|NullPointerException|ArithmeticException|ClassCastException|IndexOutOfBoundsException|IllegalArgumentException|IllegalStateException|UnsupportedOperationException|FileNotFoundException|TimeoutException|CryptographyException)\\b" },
         { "name": "entity.name.type.l2", "match": "\\b[A-Z]\\w*\\b" }
       ]
     },

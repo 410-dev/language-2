@@ -359,8 +359,8 @@ fn to_string_inner<H: Host>(v: &Value, nested: bool, h: &mut H) -> Result<String
         }
         Value::Array(a) => {
             let mut parts = Vec::with_capacity(a.items.len());
-            for it in &a.items {
-                parts.push(to_string_inner(it, true, h)?);
+            for it in a.items.iter() {
+                parts.push(to_string_inner(&it, true, h)?);
             }
             format!("[{}]", parts.join(", "))
         }
@@ -382,6 +382,7 @@ fn to_string_inner<H: Host>(v: &Value, nested: bool, h: &mut H) -> Result<String
         Value::Closure(_) => "<function>".into(),
         Value::Ref(r) => to_string_inner(&r.get(), nested, h)?,
         Value::Raw(p) => format!("<raw {:#x}>", p),
+        Value::Handle(x) => format!("<{}>", x.kind()),
     })
 }
 
@@ -436,8 +437,13 @@ pub fn values_equal<H: Host>(a: &Value, b: &Value, h: &mut H) -> Result<bool, H:
             if x.items.len() != y.items.len() {
                 return Ok(false);
             }
+            match (&x.items, &y.items) {
+                (Items::U8(p), Items::U8(q)) => return Ok(p == q),
+                (Items::Int(t, p), Items::Int(u, q)) if t == u => return Ok(p == q),
+                _ => {}
+            }
             for (p, q) in x.items.iter().zip(y.items.iter()) {
-                if !values_equal(p, q, h)? {
+                if !values_equal(&p, &q, h)? {
                     return Ok(false);
                 }
             }
@@ -477,6 +483,7 @@ pub fn values_equal<H: Host>(a: &Value, b: &Value, h: &mut H) -> Result<bool, H:
             h.obj_equals(x, y)?
         }
         (Value::Closure(x), Value::Closure(y)) => Rc::ptr_eq(x, y),
+        (Value::Handle(x), Value::Handle(y)) => Rc::ptr_eq(x, y),
         _ => match num_cmp(a, b) {
             Some(o) => o == Ordering::Equal,
             None => false,
@@ -536,7 +543,7 @@ pub fn compare<H: Host>(op: CmpOp, a: &Value, b: &Value, h: &mut H) -> Result<bo
 fn contains_objects(v: &Value) -> bool {
     match v {
         Value::Object(_) | Value::Closure(_) => true,
-        Value::Array(a) => a.items.iter().any(contains_objects),
+        Value::Array(a) => matches!(&a.items, Items::Vals(v) if v.iter().any(contains_objects)),
         Value::Dict(d) => d.entries.iter().any(|(k, v)| contains_objects(k) || contains_objects(v)),
         Value::Tuple(t) => t.iter().any(contains_objects),
         _ => false,
@@ -550,10 +557,10 @@ pub fn deep_clone<H: Host>(v: &Value, h: &mut H) -> Result<Value, H::Err> {
         Value::Array(a) => {
             if contains_objects(v) {
                 let mut items = Vec::with_capacity(a.items.len());
-                for it in &a.items {
-                    items.push(deep_clone(it, h)?);
+                for it in a.items.iter() {
+                    items.push(deep_clone(&it, h)?);
                 }
-                Value::Array(Rc::new(ArrayVal { items, fixed: a.fixed }))
+                Value::array(items, a.fixed)
             } else {
                 Value::Array(a.clone())
             }
@@ -624,7 +631,13 @@ pub fn conforms<H: Host>(v: &Value, ty: &RtType, h: &H) -> bool {
         (Value::Float(a, _), RtType::Float(b)) => a == b,
         (Value::Bool(_), RtType::Bool) => true,
         (Value::Str(_), RtType::Str) => true,
-        (Value::Array(a), RtType::Array(e)) => a.items.iter().all(|x| conforms(x, e, h)),
+        (Value::Array(a), RtType::Array(e)) => match (&a.items, &**e) {
+            (Items::U8(_), RtType::Int(IntTy::U8)) => true,
+            (Items::Int(t, _), RtType::Int(u)) => t == u,
+            (Items::Float(t, _), RtType::Float(u)) => t == u,
+            (Items::Bool(_), RtType::Bool) => true,
+            (items, _) => items.iter().all(|x| conforms(&x, e, h)),
+        },
         (Value::Dict(d), RtType::Dict(k, val)) => d.entries.iter().all(|(x, y)| conforms(x, k, h) && conforms(y, val, h)),
         (Value::Object(o), RtType::Class(c)) => h.is_subclass(o.class, *c),
         (Value::Object(o), RtType::Iface(i)) => h.implements(o.class, *i),
@@ -741,8 +754,8 @@ pub fn cast<H: Host>(v: &Value, to: &RtType, wrap: bool, h: &mut H) -> Result<Va
             if let (Value::Array(a), RtType::Array(e)) = (&v, to) {
                 let mut items = Vec::with_capacity(a.items.len());
                 let mut ok = true;
-                for it in &a.items {
-                    match cast(it, e, wrap, h) {
+                for it in a.items.iter() {
+                    match cast(&it, e, wrap, h) {
                         Ok(x) => items.push(x),
                         Err(_) => {
                             ok = false;
@@ -751,7 +764,7 @@ pub fn cast<H: Host>(v: &Value, to: &RtType, wrap: bool, h: &mut H) -> Result<Va
                     }
                 }
                 if ok {
-                    return Ok(Value::Array(Rc::new(ArrayVal { items, fixed: a.fixed })));
+                    return Ok(Value::array(items, a.fixed));
                 }
             }
         }

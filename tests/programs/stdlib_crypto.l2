@@ -1,0 +1,103 @@
+// crypto package and math.Random (spec 14.10, 14.11).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using crypto.*
+using math.Random as Random
+
+function void main() {
+    // digests (known test vectors)
+    HashDigest d = new HashDigest(algorithm="SHA-512")
+    stdio.println(d.digest("abc").toHex().substring(0, 32))
+    stdio.println(new HashDigest("SHA-256").hexDigest("abc"))
+    stdio.println(new HashDigest("sha3-256").hexDigest(&"".encode()))
+    stdio.println(new HashDigest("MD5").hexDigest("The quick brown fox jumps over the lazy dog"))
+    HashDigest s = new HashDigest("SHA-1")
+    s.update("The quick brown fox ")
+    s.update(&"jumps over the lazy dog".encode())
+    stdio.println(s.finish().toHex())
+    stdio.println(new HashDigest("SHA-256").hmac(&"key".encode(), "The quick brown fox jumps over the lazy dog").toHex())
+    stdio.println(HashDigest.algorithms())
+    try {
+        new HashDigest("SHA-999")
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+
+    // symmetric: passwords (PBKDF2) or raw keys; every message gets a fresh nonce
+    copied String plain = "ABCD 비밀"
+    SymmetricCryptography c = new SymmetricCryptography(algorithm="AES-256")
+    c.iterations(1000)
+    String sealed = c.encrypt(plain=plain, key="my-secret-key")
+    stdio.println(c.decrypt(encrypted=sealed, key="my-secret-key"))
+    stdio.println(sealed != c.encrypt(plain=plain, key="my-secret-key"))
+    Bytes box = c.encrypt(plain=plain.encode(), key="my-secret-key".encode(), salt="pepper".encode())
+    stdio.println(c.decrypt(encrypted=box, key="my-secret-key".encode(), salt="pepper".encode()).decode())
+    try {
+        c.decrypt(encrypted=sealed, key="wrong key")
+    } catch (CryptographyException e) {
+        stdio.println(e.getMessage())
+    }
+    Bytes tampered = box.clone()
+    tampered[tampered.length() - 1] = tampered[tampered.length() - 1] ^ 1
+    try {
+        c.decrypt(encrypted=tampered, key="my-secret-key".encode())
+    } catch (CryptographyException e) {
+        stdio.println(e.getMessage())
+    }
+    SymmetricCryptography raw = new SymmetricCryptography("ChaCha20-Poly1305").keyDerivation("none")
+    Bytes key = raw.generateKey()
+    stdio.println(f"{raw} key {key.length()} bytes")
+    stdio.println(raw.decrypt(raw.encrypt(&"raw key".encode(), &key), &key).decode())
+    try {
+        raw.encrypt(&"x".encode(), &"short".encode())
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+    for (alg in SymmetricCryptography.algorithms()) {
+        SymmetricCryptography x = new SymmetricCryptography(alg).iterations(10)
+        stdio.println(f"{alg}: {x.decrypt(x.encrypt("round trip", "pw"), "pw")}")
+    }
+    stdio.println(KeyDerivation.pbkdf2("SHA-256", &"password".encode(), &"salt".encode(), 1, 20).toHex())
+    stdio.println(KeyDerivation.hkdf("SHA-256", &Bytes.fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), &Bytes.fromHex("000102030405060708090a0b0c"), &Bytes.fromHex("f0f1f2f3f4f5f6f7f8f9"), 42).toHex())
+
+    // a seeded generator repeats its sequence
+    Random r1 = new Random(seed=42)
+    Random r2 = new Random(42)
+    stdio.println(f"{r1.nextInt(1000)} {r1.nextInt(1000)} {r1.nextFloat() < 1.0} {r1.isSeeded()}")
+    stdio.println(f"{r2.nextInt(1000)} {r2.nextInt(1000)}")
+    stdio.println(f"{r1.nextBytes(4).length()} {r1.nextInt(-5, 5) >= -5} {r1.choose(["a", "b", "c"]).length()}")
+    Int64[] deck = [1, 2, 3, 4, 5, 6]
+    r1.shuffle(*deck)
+    deck.sort()
+    stdio.println(deck)
+    Random os = new Random()
+    stdio.println(f"{os.isSeeded()} {os}")
+
+    // RSA (keys from a seeded generator: reproducible, for tests only)
+    AsymmetricCryptography ac = new AsymmetricCryptography(algorithm="RSA-2048")
+    Random keyRandom = new Random(seed=7)
+    pk, sk = ac.deriveKeySet(random=&keyRandom)
+    stdio.println(f"{pk} {sk} {pk.bits()}")
+    Bytes secret = ac.encrypt(plain="hi there".encode(), key=&pk)
+    stdio.println(ac.decrypt(encrypted=secret, key=&sk).decode())
+    String text = ac.encrypt("as text", &pk)
+    stdio.println(ac.decrypt(text, &sk))
+    Bytes sig = ac.sign("signed message", &sk)
+    stdio.println(f"{sig.length()} {ac.verify("signed message", &sig, &pk)} {ac.verify("other message", &sig, &pk)}")
+    String pem = pk.toPem()
+    stdio.println(pem.startsWith("-----BEGIN PUBLIC KEY-----"))
+    PublicKey loaded = PublicKey.fromPem(pem)
+    PrivateKey skLoaded = PrivateKey.fromPem(sk.toPem())
+    stdio.println(ac.verify("signed message", &sig, &loaded))
+    stdio.println(ac.decrypt(ac.encrypt("via pem", &skLoaded.publicKey()), &skLoaded))
+    Random keyRandom2 = new Random(seed=7)
+    pk2, sk2 = ac.deriveKeySet(random=&keyRandom2)
+    stdio.println(pk2.toPem() == pem)
+    try {
+        new AsymmetricCryptography("DSA")
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+}

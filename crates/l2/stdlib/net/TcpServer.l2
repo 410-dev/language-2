@@ -1,0 +1,50 @@
+@using sdk 1
+
+// net.TcpServer: accepts TCP connections (spec 14.9).
+//
+//     TcpServer server = new TcpServer("127.0.0.1", 8080)
+//     TcpSocket client = server.accept()
+
+using intrinsics as intr
+
+public class TcpServer {
+    private DTVariable handle
+
+    // listens on `host` ("127.0.0.1" for this machine only, "0.0.0.0" for every interface);
+    // port 0 picks a free port (see port())
+    public TcpServer(&String host, Int64 port) {
+        this.handle = intr.tcpListen(host, port)
+    }
+
+    // listens on 127.0.0.1
+    public TcpServer(Int64 port) {
+        this.handle = intr.tcpListen("127.0.0.1", port)
+    }
+
+    // waits for the next connection
+    public function TcpSocket accept() {
+        return TcpSocket.__wrap(intr.tcpAccept(handle))
+    }
+
+    public function String localAddress() {
+        return intr.tcpLocalAddress(handle)
+    }
+
+    public function Int64 port() {
+        String a = intr.tcpLocalAddress(handle)
+        String[] parts = a.split(":")
+        return parts.last().parse(Int64)
+    }
+
+    public function void close() {
+        intr.close(handle)
+    }
+
+    public function Boolean isOpen() {
+        return intr.isOpen(handle)
+    }
+
+    public function String toString() {
+        return intr.isOpen(handle) ? f"TcpServer({intr.tcpLocalAddress(handle)})" : "TcpServer(closed)"
+    }
+}

@@ -1,0 +1,35 @@
+true
+first line
+second line
+third line
+
+["first line", "second line", "third line"]
+true 34 bytes
+Bytes(00ff7f21)
+first line
+second
+17
+first line
+> second line
+> third line
+end of file
+false
+one
+two three
+one
+two three!
+14
+["data.bin", "notes.txt", "sub"]
+["data.bin", "notes.txt", "sub/log.txt", "sub/moved.txt"]
+report.final.txt
+report.final
+txt
+dir
+no extension
+a/c
+true
+true
+missing file: FileNotFoundException
+not empty: IOException
+false
+false

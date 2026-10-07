@@ -1,0 +1,60 @@
+@using sdk 1
+
+// system.Threads / system.Thread: the program's threads (spec 14.6). Programs have a single
+// thread, `Threads.main`, until multithreading is added.
+
+using intrinsics as intr
+
+public class Thread {
+    private Immutable Int64 threadId
+    private Immutable String threadName
+
+    public Thread(Int64 id, &String name) {
+        this.threadId = id
+        this.threadName = name.clone()
+    }
+
+    public function Int64 id() {
+        return threadId
+    }
+
+    public function String name() {
+        return threadName.clone()
+    }
+
+    public function Boolean isMain() {
+        return threadId == 0
+    }
+
+    // Pauses this thread.
+    public function void sleep(Int64 millis) {
+        intr.sysSleep(millis)
+    }
+
+    // Ends the program with `code` after flushing its output.
+    public function void exit(Int64 code) {
+        intr.sysExit(code, true)
+    }
+
+    // Ends the program with `code` immediately (buffered output may be lost).
+    public function void kill(Int64 code) {
+        intr.sysExit(code, false)
+    }
+
+    public function String toString() {
+        return f"Thread({threadId}, {threadName})"
+    }
+}
+
+public class Threads {
+    public static Immutable Thread main = new Thread(0, "main")
+
+    // the thread running the caller
+    public static function Thread current() {
+        return Threads.main.clone()
+    }
+
+    public static function Int64 count() {
+        return 1
+    }
+}

@@ -50,7 +50,11 @@ language-2 check <file>                 # 타입/소유권 검사만
 language-2 emit-llvm <file> [--target amd64] [-o out.ll]
 language-2 disasm <file>                # 바이트코드 덤프
 language-2 doctor                       # 네이티브 툴체인/런타임 점검
+language-2 sdk install | list | path    # SDK 설치 (여러 버전을 나란히, 사양 14.13)
 ```
+
+프로그램의 `@using sdk N`이 이 툴체인의 SDK 버전과 다르면, 설치된 SDK N의 툴체인이 명령을 대신 실행합니다 (사양 2.3).
+네이티브 실행 파일은 기본적으로(`IncludeDependencies=false`) 설치된 SDK의 공유 런타임(`l2_native_rt.dll` / `.so` / `.dylib`)을 불러오는 작은 파일이고, `@compiler(IncludeDependencies=true)`이면 런타임을 정적 링크한 단일 실행 파일입니다 (사양 2.5).
 
 `build`는 `@compiler(Target=[...])`에 나열된 **모든 타깃**에 대해 바이너리를 생성합니다 (사양 2.5). 해당 타깃용 런타임 라이브러리가 있으면 실행 파일까지 링크하고, 없으면 오브젝트 파일만 만듭니다. 예를 들어 32비트 x86용 런타임은 다음과 같이 준비합니다.
 
@@ -115,15 +119,50 @@ function void main() {
 }
 ```
 
+표준 라이브러리 패키지 (사양 14.5~14.12, 모두 세 백엔드에서 동일하게 동작):
+
+| 패키지 | 내용 |
+| --- | --- |
+| 프렐류드 | `Bytes`, `String.encode()`/`Bytes.decode()`, hex/base64, 숫자 `toBytes`/`fromBytes`, `toJson()` |
+| `system` | `System.shell(문자열 \| 배열)`, `sleep`, 환경 변수, `Platform`, `PlatformTask`(운영체제별 명령), `Threads.main`, `Promise`(자리만) |
+| `time` | `Duration`, `Instant`, `DateTime`(형식/파싱, 달력 연산, 오프셋) |
+| `io` | `File`(전체 읽기/쓰기, 스트림), `Directory`, `Path` |
+| `net` | `TcpSocket`, `TcpServer`, `UdpSocket`, `Http`(http/https 클라이언트) |
+| `math` | `math.Random`(시드 가능한 난수 객체), `math.linear` |
+| `crypto` | `HashDigest`(SHA-2/SHA-3/HMAC), `SymmetricCryptography`(AES-GCM, ChaCha20-Poly1305), `AsymmetricCryptography`(RSA), `KeyDerivation` |
+| `data` | `data.Json`, `data.collections.{Set, Queue, Deque, PriorityQueue}` |
+
+```
+using stdio as stdio
+using system.*
+using crypto.*
+
+function void main() {
+    PlatformTask t = new PlatformTask()
+        .windows(["cmd", "/c", "ver"])
+        .mac(["sw_vers"])
+        .linux(["uname", "-a"])
+        .execute()
+    stdio.println(t.stdout())
+
+    SymmetricCryptography c = new SymmetricCryptography(algorithm="AES-256")
+    String sealed = c.encrypt(plain="secret", key="my-secret-key")
+    stdio.println(c.decrypt(encrypted=sealed, key="my-secret-key"))
+    stdio.println(new HashDigest("SHA-256").hexDigest("abc"))
+    stdio.println([3, 1, 2].map((x) -> x * 10).filter((i, x) -> i > 0))
+}
+```
+
 더 많은 예제는 [`examples/`](examples)와 [`tests/programs/`](tests/programs)에 있습니다.
 
 ## 구조
 
 ```
 crates/
-  l2-runtime/    공유 런타임: 값 모델(Value), BigInt, 연산자, 내장 함수(문자열/배열/Dictionary/stdio)
+  l2-runtime/    공유 런타임: 값 모델(Value, 숫자 배열은 박싱 없이 저장), BigInt, 연산자, 내장 함수
     format.rs    Python식 포맷 지정자,  numeric.rs  반올림·타입 변환·텐서 커널(멀티스레드)
-  l2-native-rt/  네이티브 실행 파일에 정적 링크되는 C ABI 런타임 (l2-runtime 재사용)
+    sys/         표준 라이브러리 시스템 기능: 인코딩·JSON, 파일, 프로세스, 네트워크, 시간, 암호화
+  l2-native-rt/  네이티브 실행 파일의 C ABI 런타임 (l2-runtime 재사용): 정적 라이브러리와 공유 라이브러리
   l2/            컴파일러 라이브러리 + CLI
     lexer.rs     줄바꿈 기반 문장 종결 (사양 3.2)
     parser.rs    재귀 하향 파서 → AST
@@ -133,9 +172,11 @@ crates/
     hir.rs       세 백엔드가 공유하는 타입 지정·단형화된 중간 표현
     interp.rs    트리 워킹 인터프리터
     bytecode.rs  바이트코드 컴파일러,  vm.rs  가상 머신
-    llvm.rs      LLVM IR 생성,  native.rs  opt/llc/링커 구동
-    prelude.l2   예외 계층·Droppable·Comparable·Numeric (언어 자체로 작성)
-  l2/stdlib/     표준 라이브러리 (언어 자체로 작성, 컴파일러에 내장): math/linear/{Tensor,Matrix,Vector}.l2
+    llvm.rs      LLVM IR 생성,  native.rs  opt/llc/링커 구동,  sdk.rs  SDK 설치·버전 선택
+    check/arrays.rs  배열 메서드(map/filter/reduce/...)를 루프로 낮춤
+    prelude.l2   예외 계층·Droppable·Comparable·Numeric·Bytes (언어 자체로 작성)
+  l2/stdlib/     표준 라이브러리 (언어 자체로 작성, 컴파일러에 내장):
+                 system/ time/ io/ net/ math/ crypto/ data/ (intrinsics로 l2-runtime의 sys 기능 호출)
 tests/
   programs/      차분 테스트 프로그램 (*.l2, 기대 출력 *.out, 선택: *.err, *.in)
   errors/        컴파일 에러 테스트 (첫 줄 `// error: <메시지>`)
@@ -159,7 +200,7 @@ tests/
 
 ### 네이티브 백엔드
 
-- LLVM IR을 **텍스트로 생성**하고 rustup `llvm-tools`의 `opt`/`llc`로 오브젝트 파일을 만든 뒤, Windows에서는 MSVC `link.exe`(없으면 `rust-lld`), 그 외에서는 `cc`로 런타임과 정적 링크합니다.
+- LLVM IR을 **텍스트로 생성**하고 rustup `llvm-tools`의 `opt`/`llc`로 오브젝트 파일을 만든 뒤, Windows에서는 MSVC `link.exe`(없으면 `rust-lld`), 그 외에서는 `cc`로 런타임과 링크합니다. `IncludeDependencies=false`(기본)이면 공유 런타임에(Windows는 지연 로드 + 시작 코드가 SDK 디렉터리에서 DLL을 찾음), `true`이면 정적 런타임에 링크합니다.
 - 예외는 런타임의 대기(pending) 플래그로 전파하며, 호출 후 플래그를 검사해 catch/finally/스코프 해제 블록으로 분기합니다.
 - 가상 호출은 메서드 셀렉터마다 생성되는 디스패치 함수(클래스 ID `switch`)로 처리합니다.
 
@@ -192,7 +233,7 @@ cargo test
 | 9 | 복사/이동 타입, 참조 `&`/`*`, `copied`, 참조 반환 규칙, `Droppable`/해제 순서, manual 모드/`free` | ✅ (빌림 검사는 단순화) |
 | 10 | 클래스/상속/인터페이스/`default`/`= origin`/`super(X)`, 생성자 규칙, getter/setter | ✅ |
 | 11–13 | String/숫자/배열/Dictionary 메서드, 음수 인덱스, 부호 없는 인덱스 금지 | ✅ |
-| 14 | `using`(파일/함수 스코프), 순환 import, 정적 초기화 순환 검출, stdio | ✅ |
+| 14 | `using`(파일/함수 스코프), 순환 import, 정적 초기화 순환 검출, stdio, 패키지, 표준 라이브러리(14.4~14.12), SDK 설치(14.13) | ✅ |
 | 15 | 세 백엔드, 크로스 컴파일, 차분 테스트 | ✅ |
 
 ## 사양 해석 및 결정 사항
@@ -231,5 +272,7 @@ cargo test
 - **제네릭 본문 검사**: 단형화 방식이라 제네릭 본문은 인스턴스화될 때(구체 타입으로) 검사됩니다. 사용되지 않은 제네릭은 검사되지 않습니다. 클래스의 제네릭 메서드(`function T f[T](...)`)는 지원하지만 가상 호출 대상이 아니며(오버라이드 불가), 인터페이스의 제네릭 메서드는 아직 지원하지 않습니다.
 - **빌림 검사**: 이동 후 사용·미할당 사용은 흐름 분석으로 정확히 검사하지만, 빌림 충돌은 (1) 같은 호출 안의 `*x`와 다른 사용, (2) 같은 호출에서 빌려 전달한 값을 다른 인자로 이동, (3) 참조 변수가 살아 있는 동안 원본의 이동/대입/변경, (4) for-each로 순회 중인 컬렉션의 변경을 검사하는 단순화된 형태입니다.
 - **IntegerOverflow 범위 순환**: `T.range(a, b, step)`의 마지막 증가가 타입 범위를 넘으면 정책(`error`)에 따라 예외가 날 수 있습니다.
-- **패키지/외부 라이브러리**(사양 16.1, 9.8), `Shared[T]`, 표준 라이브러리 확장은 추후 작업입니다. `IncludeDependencies` 옵션은 파싱만 합니다.
+- **외부 라이브러리 배포**(사양 16.1, 9.8), `Shared[T]`, 멀티스레딩(`Promise`), FFI는 추후 작업입니다.
+- **공유 런타임**: Linux/macOS의 rpath 처리는 구현했지만 이 저장소에서는 Windows에서만 실행해 확인했습니다. 같은 SDK 버전 안에서 런타임과 실행 파일의 빌드가 다를 때의 ABI 검사는 아직 없습니다.
+- **RSA**: `rsa` 크레이트를 감쌉니다. 이 크레이트에는 복호화 시간 차이로 키가 새어 나갈 수 있다는 공개 권고(RUSTSEC-2023-0071, "Marvin attack")가 있으므로, 공격자가 복호화 시간을 많이 잴 수 있는 서버 환경에서는 RSA 복호화를 피하는 것이 좋습니다.
 - **성능**: 네이티브 코드는 숫자 연산·제어 흐름을 직접 컴파일하지만, 문자열·배열·객체 필드 접근은 런타임 호출을 거칩니다.

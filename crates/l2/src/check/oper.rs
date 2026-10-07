@@ -553,8 +553,49 @@ impl<'a> Checker<'a> {
     }
 
     // ------------------------------------------------------------------ intrinsics
+    /// The language type of a system-operation signature letter (see `l2_runtime::sys`).
+    fn sig_type(c: char) -> Type {
+        match c {
+            'S' => Type::Str,
+            's' => Type::Nullable(Box::new(Type::Str)),
+            'I' => Type::int64(),
+            'F' => Type::Float(FloatTy::F64),
+            'B' => Type::Bool,
+            'Y' => Type::Array(Box::new(Type::Int(IntTy::U8))),
+            'A' => Type::Array(Box::new(Type::Str)),
+            'L' => Type::Array(Box::new(Type::int64())),
+            'M' => Type::Dict(Box::new(Type::Str), Box::new(Type::Str)),
+            'V' => Type::Void,
+            _ => Type::Dyn,
+        }
+    }
+
+    /// `intr.fsReadBytes(path)`: a system operation, checked against its signature.
+    fn sys_intrinsic(&mut self, op: l2_runtime::sys::SysOp, args: &'a [ast::Arg], span: Span) -> HExpr {
+        let (ps, rs) = op.sig().split_once('>').unwrap_or((op.sig(), "V"));
+        let params: Vec<Type> = ps.chars().map(Self::sig_type).collect();
+        let ret = if let Some(inner) = rs.strip_prefix('(') {
+            Type::Tuple(inner.trim_end_matches(')').chars().map(Self::sig_type).collect())
+        } else {
+            Self::sig_type(rs.chars().next().unwrap_or('V'))
+        };
+        if args.len() != params.len() || args.iter().any(|a| a.name.is_some()) {
+            self.err(span, format!("intrinsic '{}' takes {} positional argument(s)", op.name(), params.len()));
+            return self.bad(span);
+        }
+        let mut out = vec![HExpr::new(H::Lit(Lit::Int(op.code() as i128)), Type::int32(), span)];
+        for (a, p) in args.iter().zip(params.iter()) {
+            let x = self.expr(&a.value, Some(p));
+            out.push(if *p == Type::Dyn { x } else { self.coerce(x, p, a.value.span) });
+        }
+        HExpr::new(H::Builtin(Builtin::Sys, out), ret, span)
+    }
+
     /// Numeric kernels for `math.linear` (standard library only).
     pub fn intrinsic_call(&mut self, name: &str, targs: Option<&'a [ast::Expr]>, args: &'a [ast::Arg], span: Span) -> HExpr {
+        if let Some(op) = l2_runtime::sys::SysOp::by_name(name) {
+            return self.sys_intrinsic(op, args, span);
+        }
         let wrap = self.cur_ref().wrap;
         let arity = match name {
             "zip" => 4,

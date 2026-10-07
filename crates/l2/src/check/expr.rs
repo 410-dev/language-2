@@ -36,8 +36,10 @@ impl<'a> Checker<'a> {
     pub fn cur_ref(&self) -> &FnCtx {
         self.fstack.last().expect("no function context")
     }
+    /// Manual memory management applies to the program's own code; the standard library is
+    /// always checked with ownership rules (spec 9.1).
     pub fn manual(&self) -> bool {
-        self.config.memory == MemoryMode::Manual
+        self.config.memory == MemoryMode::Manual && !self.fstack.last().map(|c| self.modules[c.module].is_stdlib).unwrap_or(false)
     }
 
     // ------------------------------------------------------------------ locals
@@ -224,6 +226,12 @@ impl<'a> Checker<'a> {
             return e;
         }
         if let Type::Ref(false, inner) = to {
+            // any value can be lent as a `&DTVariable`
+            if **inner == Type::Dyn && !matches!(e.ty, Type::Ref(true, _)) && self.assignable(e.ty.deref(), inner) {
+                let mut e = e;
+                e.ty = Type::Dyn;
+                return e;
+            }
             if self.assignable(&e.ty, to) {
                 if e.ty == **inner || matches!(e.ty, Type::Ref(..)) {
                     return e;
@@ -1038,6 +1046,11 @@ impl<'a> Checker<'a> {
             _ => None,
         };
         match op {
+            // array concatenation (spec 13.3): a new array, operands are borrowed
+            BinOp::Add if matches!(xt, Type::Array(_)) && matches!(yt, Type::Array(_)) => {
+                let y = self.coerce(y, &xt, span);
+                HExpr::new(H::Builtin(Builtin::ArrConcat, vec![x, y]), xt, span)
+            }
             BinOp::Add if xt == Type::Str || yt == Type::Str => {
                 for z in [&x, &y] {
                     if z.ty == Type::Void {
@@ -1331,6 +1344,18 @@ impl<'a> Checker<'a> {
             Some(Type::Func(ps, r)) => (Some(ps.clone()), Some((**r).clone())),
             _ => (None, None),
         };
+        self.lambda_inner(params, body, is_move, exp_params, exp_ret, span)
+    }
+
+    /// A lambda with expected parameter types and an inferred result type.
+    pub fn lambda_with_params(&mut self, e: &'a ast::Expr, ps: Vec<Type>) -> HExpr {
+        match &e.kind {
+            A::Lambda { params, body, is_move, .. } => self.lambda_inner(params, body, *is_move, Some(ps), None, e.span),
+            _ => self.expr(e, None),
+        }
+    }
+
+    fn lambda_inner(&mut self, params: &'a [ast::Param], body: &'a ast::LambdaBody, is_move: bool, exp_params: Option<Vec<Type>>, exp_ret: Option<Type>, span: Span) -> HExpr {
         if let Some(ps) = &exp_params {
             if ps.len() != params.len() {
                 self.err(span, format!("lambda has {} parameter(s) but {} were expected", params.len(), ps.len()));
@@ -1955,6 +1980,23 @@ impl<'a> Checker<'a> {
             self.err(span, format!("instance method '{}' cannot be called from a static context", m.name));
             return HExpr::new(H::Lit(Lit::Null), m.ret.clone(), span);
         };
+        // a chaining method (returning `*C`) called on a temporary object evaluates to that
+        // object, so builder chains can end in an owned value:
+        // `Task t = new Task().name("x").run()` (spec 10.6)
+        let temp_recv = matches!(recv.ty, Type::Class(_)) && !matches!(recv.kind, H::Local(_) | H::Move(_) | H::Field(..) | H::Global(_) | H::Deref(_) | H::Unwrap(_) | H::TupleGet(..));
+        if temp_recv && matches!(&m.ret, Type::Ref(true, inner) if matches!(**inner, Type::Class(_))) {
+            let rty = recv.ty.clone();
+            let tmp = self.temp(rty.clone(), span);
+            let mut all = vec![HExpr::new(H::Local(tmp), rty.clone(), span)];
+            all.extend(out);
+            let call = match (m.selector, direct, m.func) {
+                (Some(sel), false, _) => HExpr::new(H::CallVirtual(sel, all), m.ret.clone(), span),
+                (_, _, Some(f)) => HExpr::new(H::Call(f, all), m.ret.clone(), span),
+                _ => return HExpr::new(H::Lit(Lit::Null), Type::Error, span),
+            };
+            let stmts = vec![hir::Stmt { kind: StmtKind::Let(tmp, Some(recv)), span }, hir::Stmt { kind: StmtKind::Expr(call), span }];
+            return HExpr::new(H::Seq(stmts, Box::new(HExpr::new(H::Move(tmp), rty.clone(), span))), rty, span);
+        }
         let mut all = vec![recv];
         all.extend(out);
         match (m.selector, direct) {

@@ -16,11 +16,15 @@ USAGE:
     {name} emit-llvm <file> [--target amd64] [-o <file.ll>]
     {name} disasm <file>
     {name} doctor
+    {name} sdk install | list | path
 
 Backends: 'interpreter' (tree-walking, default), 'bytecode' (bytecode VM), 'compiler' (LLVM native).
-The program's '@runtime' directive lists which backends it supports.",
+The program's '@runtime' directive lists which backends it supports.
+This toolchain is SDK {sdk}; programs that use another '@using sdk N' run with the installed
+SDK N (see '{name} sdk list').",
         name = l2::LANG_NAME,
-        ver = env!("CARGO_PKG_VERSION")
+        ver = env!("CARGO_PKG_VERSION"),
+        sdk = l2::sdk::SDK_VERSION
     );
     ExitCode::from(2)
 }
@@ -118,6 +122,7 @@ fn main() -> ExitCode {
     };
     match cmd.as_str() {
         "doctor" => return doctor(o.quiet),
+        "sdk" => return sdk_command(o.positional.first().map(|s| s.as_str())),
         "help" | "--help" | "-h" => {
             usage();
             return ExitCode::SUCCESS;
@@ -132,6 +137,10 @@ fn main() -> ExitCode {
         return usage();
     };
     let path = PathBuf::from(file);
+    // programs written for another SDK version run with that version's toolchain (spec 2.3)
+    if let Some(code) = delegate_sdk(&path, &args) {
+        return code;
+    }
     let prog_args: Vec<String> = o.positional[1..].to_vec();
     let comp = match compile(&path, o.quiet) {
         Ok(c) => c,
@@ -176,6 +185,14 @@ fn main() -> ExitCode {
                         }
                         if let Some(n) = r.note {
                             eprintln!("  note: {}", n);
+                        }
+                        if r.shared_runtime.is_some() && !o.quiet {
+                            eprintln!(
+                                "  note: uses the shared runtime of SDK {}: machines that run it need that SDK installed ('{} sdk install') or {} next to it; @compiler(IncludeDependencies=true) builds a self-contained executable",
+                                p.config.sdk,
+                                l2::LANG_NAME,
+                                r.shared_runtime.as_ref().and_then(|f| f.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_default()
+                            );
                         }
                     }
                     ExitCode::SUCCESS
@@ -222,14 +239,20 @@ fn run_native(p: &Program, path: &Path, args: Vec<String>, opt: u8, target: Opti
             return ExitCode::from(1);
         }
     };
-    let Some(exe) = results.into_iter().next().and_then(|r| {
+    let Some((exe, shared)) = results.into_iter().next().and_then(|r| {
         if let Some(n) = &r.note {
             eprintln!("error: {}", n);
         }
-        r.executable
+        r.executable.map(|e| (e, r.shared_runtime))
     }) else {
         return ExitCode::from(1);
     };
+    // the temporary executable finds the shared runtime next to itself
+    if let Some(rt) = shared {
+        if let Some(name) = rt.file_name() {
+            let _ = std::fs::copy(&rt, dir.join(name));
+        }
+    }
     let status = std::process::Command::new(&exe).args(&args).status();
     let _ = std::fs::remove_dir_all(&dir);
     match status {
@@ -259,19 +282,82 @@ fn doctor(quiet: bool) -> ExitCode {
         }
     }
     for t in [Target::Amd64, Target::I386, Target::Arm64] {
-        match l2::native::find_runtime(t) {
-            Some(p) => say(format!("runtime [{}]: {}", t.name(), p.display())),
-            None => {
-                say(format!("runtime [{}]: not built (objects only)", t.name()));
-                if t == l2::native::host_target() {
-                    ok = false;
+        for shared in [false, true] {
+            let kind = if shared { "shared" } else { "static" };
+            match l2::native::find_runtime(t, shared) {
+                Some(p) => say(format!("runtime [{}, {}]: {}", t.name(), kind, p.display())),
+                None => {
+                    say(format!("runtime [{}, {}]: not built (objects only)", t.name(), kind));
+                    if t == l2::native::host_target() {
+                        ok = false;
+                    }
                 }
             }
         }
     }
+    say(format!("SDK home: {} (this toolchain: SDK {}, installed: {:?})", l2::sdk::home().display(), l2::sdk::SDK_VERSION, l2::sdk::installed()));
     if ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+/// Runs the command with the toolchain of the SDK version the program asks for, when that is
+/// not this toolchain's version. `None` = handle it here.
+fn delegate_sdk(path: &Path, args: &[String]) -> Option<ExitCode> {
+    let src = std::fs::read_to_string(path).ok()?;
+    let v = l2::sdk::requested_version(&src)?;
+    if v == l2::sdk::SDK_VERSION || std::env::var_os("L2_SDK_DELEGATED").is_some() {
+        return None;
+    }
+    let Some(tool) = l2::sdk::toolchain(v) else {
+        // reported by the checker with the list of installed versions
+        return None;
+    };
+    let status = std::process::Command::new(&tool).args(args).env("L2_SDK_DELEGATED", "1").status();
+    Some(match status {
+        Ok(s) => exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("error: cannot run the SDK {} toolchain {}: {}", v, tool.display(), e);
+            ExitCode::from(1)
+        }
+    })
+}
+
+fn sdk_command(sub: Option<&str>) -> ExitCode {
+    match sub {
+        Some("install") => match l2::sdk::install() {
+            Ok(done) => {
+                println!("installed SDK {}:", l2::sdk::SDK_VERSION);
+                for d in done {
+                    println!("  {}", d);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {}", e);
+                ExitCode::from(1)
+            }
+        },
+        Some("list") => {
+            let inst = l2::sdk::installed();
+            println!("this toolchain: SDK {}", l2::sdk::SDK_VERSION);
+            if inst.is_empty() {
+                println!("installed: none ({})", l2::sdk::home().display());
+            }
+            for v in inst {
+                println!("installed: SDK {} ({})", v, l2::sdk::sdk_dir(v).display());
+            }
+            ExitCode::SUCCESS
+        }
+        Some("path") => {
+            println!("{}", l2::sdk::home().display());
+            ExitCode::SUCCESS
+        }
+        _ => {
+            eprintln!("usage: {} sdk install | list | path", l2::LANG_NAME);
+            ExitCode::from(2)
+        }
     }
 }

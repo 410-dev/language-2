@@ -1,0 +1,112 @@
+@using sdk 1
+
+// data.collections.PriorityQueue: the smallest value first (spec 14.12), as a binary heap.
+//
+//     PriorityQueue[Int64] q = new PriorityQueue[Int64]()                       // natural order
+//     PriorityQueue[Task] t = new PriorityQueue[Task]((&Task a, &Task b) -> a.priority - b.priority)
+//
+// A comparator returns a negative number when `a` comes first. add and poll take O(log n).
+
+using intrinsics as intr
+
+public class PriorityQueue[T] {
+    private T[] heap
+    private Function[(&T, &T), Int64]? comparator
+
+    // natural order (numbers, strings, Comparable objects), smallest first
+    public PriorityQueue() {
+        this.heap = T.array()
+        this.comparator = null
+    }
+
+    public PriorityQueue(Function[(&T, &T), Int64] comparator) {
+        this.heap = T.array()
+        this.comparator = comparator
+    }
+
+    private function Int64 compare(Int64 i, Int64 j) {
+        if (comparator != null) {
+            return comparator!(&heap[i], &heap[j])
+        }
+        return intr.compare(heap[i], heap[j])
+    }
+
+    public function void add(T value) {
+        heap.add(value)
+        Int64 i = heap.length() - 1
+        for (; i > 0;) {
+            Int64 parent = (i - 1) / 2
+            if (compare(i, parent) >= 0) {
+                break
+            }
+            heap.swap(i, parent)
+            i = parent
+        }
+    }
+
+    // removes and returns the first value; IllegalStateException when empty
+    public function T poll() {
+        if (heap.isEmpty()) {
+            throw IllegalStateException("poll from an empty priority queue")
+        }
+        heap.swap(0, -1)
+        T top = heap.pop()
+        Int64 n = heap.length()
+        Int64 i = 0
+        for (;;) {
+            Int64 l = 2 * i + 1
+            Int64 r = l + 1
+            Int64 m = i
+            if (l < n and compare(l, m) < 0) {
+                m = l
+            }
+            if (r < n and compare(r, m) < 0) {
+                m = r
+            }
+            if (m == i) {
+                break
+            }
+            heap.swap(i, m)
+            i = m
+        }
+        return top
+    }
+
+    // the first value without removing it (a copy for objects and strings)
+    public function T peek() {
+        if (heap.isEmpty()) {
+            throw IllegalStateException("peek at an empty priority queue")
+        }
+        return heap[0].clone()
+    }
+
+    public function Int64 length() {
+        return heap.length()
+    }
+
+    public function Boolean isEmpty() {
+        return heap.isEmpty()
+    }
+
+    public function void clear() {
+        heap.clear()
+    }
+
+    // all values in priority order (the queue is unchanged)
+    public function T[] toSortedArray() {
+        PriorityQueue[T] copy = new PriorityQueue[T]()
+        copy.heap = heap.clone()
+        if (comparator != null) {
+            copy.comparator = comparator!.clone()
+        }
+        T[] out = T.array()
+        for (; !copy.isEmpty();) {
+            out.add(copy.poll())
+        }
+        return out
+    }
+
+    public function String toString() {
+        return f"PriorityQueue{toSortedArray()}"
+    }
+}

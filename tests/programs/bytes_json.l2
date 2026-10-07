@@ -1,0 +1,70 @@
+// Bytes, text encodings, numbers as bytes and JSON (spec 14.5).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using data.Json as Json
+
+function void main() {
+    Bytes b = "héllo, 세계".encode()
+    stdio.println(f"{b.length()} bytes: {b.toHex()}")
+    stdio.println(b.decode())
+    stdio.println(b.toBase64())
+    stdio.println(Bytes.fromBase64(b.toBase64()).decode())
+    stdio.println(Bytes.fromHex("48656c6c6f").decode())
+    stdio.println("ab".encode("utf-16le"))
+    stdio.println("ab".encode("utf-16be").decode("utf-16be"))
+    stdio.println("é".encode("latin-1"))
+    stdio.println(b.slice(0, 5).decode() + "|" + b.slice(-6).decode())
+    Bytes c = "ab".encode() + "cd".encode()
+    c.append(Bytes.fromHex("21"))
+    c[0] = 65
+    stdio.println(f"{c.decode()} {c[1]} {c.indexOf(100)} {c == "Abcd!".encode()} {c.equalsConstantTime(&"Abcd!".encode())}")
+    stdio.println(Bytes.zeros(3))
+    stdio.println(Bytes.random(16).length())
+    try {
+        Bytes.fromHex("ff fe").decode()
+    } catch (IllegalArgumentException e) {
+        stdio.println(f"error: {e.getMessage()}")
+    }
+    try {
+        "한".encode("ascii")
+    } catch (IllegalArgumentException e) {
+        stdio.println(f"error: {e.getMessage()}")
+    }
+
+    // numbers <-> bytes (big endian unless "little")
+    Int32 n = 258
+    stdio.println(n.toBytes())
+    stdio.println(n.toBytes("little"))
+    stdio.println(Int32.fromBytes(&n.toBytes()))
+    stdio.println(UInt16.fromBytes(&Bytes.fromHex("ff01"), "little"))
+    Int16 neg = -2
+    stdio.println(neg.toBytes())
+    stdio.println(Int16.fromBytes(&neg.toBytes()))
+    stdio.println(1.5.toBytes())
+    stdio.println(Float64.fromBytes(&1.5.toBytes()))
+    IntLarge big = 300
+    stdio.println(big.toBytes())
+    IntLarge mbig = -129
+    stdio.println(IntLarge.fromBytes(&mbig.toBytes()))
+
+    // JSON
+    Dictionary[String, DTVariable] d = {"name": "Ann", "age": 31, "tags": ["a", "b"], "ok": true, "none": null, "pi": 3.25}
+    stdio.println(d.toJson())
+    stdio.println(d.toJson(2))
+    Int64[] xs = [1, 2, 3]
+    stdio.println(xs.toJson())
+    stdio.println("quote \" and \n".toJson())
+    DTVariable v = Json.parse("{\"a\": [1, 2.5, \"x\\u00e9\", null], \"b\": {\"c\": false}, \"big\": 123456789012345678901234567890}")
+    stdio.println(v)
+    stdio.println(Json.stringify(&v))
+    Dictionary[String, DTVariable] obj = v.castTo(Dictionary[String, DTVariable])
+    stdio.println(obj.keys())
+    stdio.println(Json.stringify(&obj, 1))
+    try {
+        Json.parse("[1, 2,]")
+    } catch (IllegalArgumentException e) {
+        stdio.println(f"error: {e.getMessage()}")
+    }
+}

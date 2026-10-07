@@ -1,0 +1,5 @@
+// error: the comparator of String[].sortBy must return an integer, found Boolean
+function void main() {
+    String[] xs = ["b", "a"]
+    xs.sortBy((a, b) -> a.length() < b.length())
+}

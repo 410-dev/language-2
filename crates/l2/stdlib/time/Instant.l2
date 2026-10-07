@@ -1,0 +1,43 @@
+@using sdk 1
+
+// time.Instant: a point on the monotonic clock, for measuring elapsed time (spec 14.7).
+// Instants are only meaningful relative to each other within one run of the program.
+
+using intrinsics as intr
+
+public class Instant {
+    private Immutable Int64 nanos
+
+    private Instant(Int64 nanos) {
+        this.nanos = nanos
+    }
+
+    public static function Instant now() {
+        return new Instant(intr.timeMonotonicNanos())
+    }
+
+    // time passed since this instant
+    public function Duration elapsed() {
+        return new Duration(intr.timeMonotonicNanos() - nanos)
+    }
+
+    public function Duration operator-(&Instant earlier) {
+        return new Duration(nanos - earlier.nanos)
+    }
+
+    public function Instant operator+(&Duration d) {
+        return new Instant(nanos + d.toNanos())
+    }
+
+    public function Instant operator-(&Duration d) {
+        return new Instant(nanos - d.toNanos())
+    }
+
+    public function Int32 compareTo(&Instant other) {
+        return nanos.compareTo(other.nanos)
+    }
+
+    public function String toString() {
+        return f"Instant({intr.durationString(nanos)} since start)"
+    }
+}

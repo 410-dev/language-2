@@ -1,5 +1,8 @@
-// Prelude: implicitly visible in every module (spec 7.6 exception hierarchy, 9.6 Droppable).
+// Prelude: implicitly visible in every module (spec 7.6 exception hierarchy, 9.6 Droppable,
+// 14.5 Bytes).
 @using sdk 1
+
+using intrinsics as intr
 
 public class Throwable {
     private Immutable String message
@@ -67,6 +70,26 @@ public class UnsupportedOperationException extends RuntimeException {
     public UnsupportedOperationException() { super() }
 }
 
+public class FileNotFoundException extends IOException {
+    public FileNotFoundException(String message) { super(message) }
+    public FileNotFoundException() { super() }
+}
+
+public class TimeoutException extends IOException {
+    public TimeoutException(String message) { super(message) }
+    public TimeoutException() { super() }
+}
+
+public class IllegalStateException extends RuntimeException {
+    public IllegalStateException(String message) { super(message) }
+    public IllegalStateException() { super() }
+}
+
+public class CryptographyException extends RuntimeException {
+    public CryptographyException(String message) { super(message) }
+    public CryptographyException() { super() }
+}
+
 public class OutOfMemoryError extends Error {
     public OutOfMemoryError(String message) { super(message) }
     public OutOfMemoryError() { super() }
@@ -92,4 +115,186 @@ public interface Comparable {
 // Bound for numeric generic code (spec 4.12): satisfied by every built-in numeric type
 // (Int8..Int64, UInt8..UInt64, IntLarge, Float16..Float64); classes cannot implement it.
 public interface Numeric extends Comparable {
+}
+
+// Binary data (spec 14.5): a UInt8[] with byte-oriented operations. Text becomes Bytes with
+// String.encode() and back with decode(); binary data is shown as text with toHex() / toBase64().
+public class Bytes {
+    private UInt8[] data
+
+    public Bytes() {
+        this.data = UInt8.array()
+    }
+
+    public Bytes(UInt8[] data) {
+        this.data = data
+    }
+
+    // `n` zero bytes
+    public static function Bytes zeros(Int64 n) {
+        return new Bytes(UInt8.array(n))
+    }
+
+    public static function Bytes fromHex(String text) {
+        return new Bytes(intr.bytesFromHex(text))
+    }
+
+    // standard or URL-safe alphabet, with or without padding
+    public static function Bytes fromBase64(String text) {
+        return new Bytes(intr.bytesFromBase64(text))
+    }
+
+    // `n` bytes from the operating system's secure random generator
+    public static function Bytes random(Int64 n) {
+        return new Bytes(intr.secureBytes(n))
+    }
+
+    public function Int64 length() {
+        return data.length()
+    }
+
+    public function Boolean isEmpty() {
+        return data.isEmpty()
+    }
+
+    public function UInt8 operator[](Int64 i) {
+        return data[i]
+    }
+
+    public function void operator[]=(Int64 i, UInt8 value) {
+        data[i] = value
+    }
+
+    public function Bytes operator+(&Bytes other) {
+        return new Bytes(data.concat(other.data))
+    }
+
+    public function Bytes slice(Int64 from) {
+        return new Bytes(data.slice(from))
+    }
+
+    public function Bytes slice(Int64 from, Int64 to) {
+        return new Bytes(data.slice(from, to))
+    }
+
+    public function void append(&Bytes other) {
+        data.addAll(other.data)
+    }
+
+    public function void append(UInt8 value) {
+        data.add(value)
+    }
+
+    public function Int64 indexOf(UInt8 value) {
+        return data.indexOf(value)
+    }
+
+    // UTF-8 text; throws IllegalArgumentException for bytes that are not valid text
+    public function String decode() {
+        return intr.bytesDecode(data, "utf-8")
+    }
+
+    // "utf-8", "utf-16le", "utf-16be", "ascii" or "latin-1"
+    public function String decode(String encoding) {
+        return intr.bytesDecode(data, encoding)
+    }
+
+    public function String toHex() {
+        return intr.bytesToHex(data, false)
+    }
+
+    public function String toHex(Boolean upperCase) {
+        return intr.bytesToHex(data, upperCase)
+    }
+
+    public function String toBase64() {
+        return intr.bytesToBase64(data, false)
+    }
+
+    public function String toBase64(Boolean urlSafe) {
+        return intr.bytesToBase64(data, urlSafe)
+    }
+
+    public function UInt8[] toArray() {
+        return data.clone()
+    }
+
+    // comparison that takes the same time wherever the first difference is (for secrets)
+    public function Boolean equalsConstantTime(&Bytes other) {
+        return intr.constantTimeEquals(data, other.data)
+    }
+
+    public function String toString() {
+        return f"Bytes({intr.bytesToHex(data, false)})"
+    }
+}
+
+// ------------------------------------------------------------------ internal helpers
+// (used by the compiler for built-in methods; not part of the language)
+
+function Bytes __stringEncode(&String s, String encoding) {
+    return new Bytes(intr.strEncode(s, encoding))
+}
+
+function Bytes __numberToBytes(DTVariable n, String order) {
+    return new Bytes(intr.numToBytes(n, order))
+}
+
+function DTVariable __numberFromBytes(&Bytes b, String type, String order) {
+    return intr.numFromBytes(b.toArray(), type, order)
+}
+
+// stable merge sort of an index permutation, then one reordering of the array
+function void __arraySortByRef[T, R](*T[] a, Function[(&T, &T), R] cmp) {
+    Int64 n = a.length()
+    Int64[] idx = Int64.range(0, n)
+    Int64[] buf = Int64.array(n)
+    for (Int64 width = 1; width < n; width *= 2) {
+        for (Int64 lo = 0; lo < n; lo += 2 * width) {
+            Int64 mid = lo + width < n ? lo + width : n
+            Int64 hi = lo + 2 * width < n ? lo + 2 * width : n
+            Int64 i = lo
+            Int64 j = mid
+            for (Int64 k = lo; k < hi; k += 1) {
+                if (i < mid and (j >= hi or cmp(&a[idx[i]], &a[idx[j]]) <= 0)) {
+                    buf[k] = idx[i]
+                    i += 1
+                } else {
+                    buf[k] = idx[j]
+                    j += 1
+                }
+            }
+        }
+        Int64[] t = idx
+        idx = buf
+        buf = t
+    }
+    a.__permute(idx)
+}
+
+function void __arraySortByValue[T, R](*T[] a, Function[(T, T), R] cmp) {
+    Int64 n = a.length()
+    Int64[] idx = Int64.range(0, n)
+    Int64[] buf = Int64.array(n)
+    for (Int64 width = 1; width < n; width *= 2) {
+        for (Int64 lo = 0; lo < n; lo += 2 * width) {
+            Int64 mid = lo + width < n ? lo + width : n
+            Int64 hi = lo + 2 * width < n ? lo + 2 * width : n
+            Int64 i = lo
+            Int64 j = mid
+            for (Int64 k = lo; k < hi; k += 1) {
+                if (i < mid and (j >= hi or cmp(a[idx[i]].clone(), a[idx[j]].clone()) <= 0)) {
+                    buf[k] = idx[i]
+                    i += 1
+                } else {
+                    buf[k] = idx[j]
+                    j += 1
+                }
+            }
+        }
+        Int64[] t = idx
+        idx = buf
+        buf = t
+    }
+    a.__permute(idx)
 }

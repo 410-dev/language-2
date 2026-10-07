@@ -1,0 +1,29 @@
+@using sdk 1
+
+// data.Json: JSON text (spec 14.5).
+//
+//     DTVariable v = Json.parse("{\"name\": \"Ann\", \"tags\": [1, 2]}")
+//     Dictionary[String, DTVariable] d = v.castTo(Dictionary[String, DTVariable])
+//     String text = Json.stringify(&d, 2)          // or d.toJson(2)
+//
+// Objects become Dictionary[String, DTVariable], arrays DTVariable[], integers Int64 (IntLarge
+// when they do not fit), other numbers Float64, null Null. Invalid text throws
+// IllegalArgumentException with the line and offset.
+
+using intrinsics as intr
+
+public class Json {
+    public static function DTVariable parse(&String text) {
+        return intr.jsonParse(text)
+    }
+
+    // compact JSON text
+    public static function String stringify(&DTVariable value) {
+        return intr.jsonStringify(value, 0)
+    }
+
+    // indented by `indent` spaces per level
+    public static function String stringify(&DTVariable value, Int64 indent) {
+        return intr.jsonStringify(value, indent)
+    }
+}

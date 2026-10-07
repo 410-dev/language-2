@@ -1,0 +1,27 @@
+[5, 3, 8, 1, 9, 2]
+pop 2 -> [5, 3, 8, 1, 9]
+slice [3, 8] [7, 7] index 5 last 6 missing -1
+[5, 3, 8, 1, 9, 7, 7, 100]
+[5, 3, 8, 1, 9, 7, 7, 0]
+5 | 3 | 8 | 1 | 9 | 7 | 7
+[50, 30, 80, 10, 90, 70, 70]
+["0:5", "1:3", "2:8", "3:1", "4:9", "5:7", "6:7"]
+[5, 3, 1, 9, 7, 7]
+[5, 8]
+40
+5,3,8,1,9,7,7
+find 8 none null at 2
+any true all true count 2
+total 40
+descending [9, 8, 7, 7, 5, 3, 1]
+cleared [] true
+["pen", "book", "cup"]
+[Item(name="pen", price=3), Item(name="cup", price=5)]
+["pen", "cup", "book"]
+20
+12
+["fig", "pear", "banana"]
+[3, 4, 6]
+[2, 4]
+error: pop from an empty array
+error: add on a length-immutable array

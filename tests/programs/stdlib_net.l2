@@ -1,0 +1,67 @@
+// net package over the loopback interface (spec 14.9).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using net.*
+
+function void main() {
+    // TCP: the connection completes in the listen backlog, so one thread can play both ends
+    TcpServer server = new TcpServer(0)
+    Int64 port = server.port()
+    stdio.println(port > 0)
+    TcpSocket client = new TcpSocket("127.0.0.1", port, 2000)
+    TcpSocket conn = server.accept()
+    client.writeLine("hello server")
+    client.write(&"bytes!".encode())
+    client.shutdownOutput()
+    stdio.println(conn.readLine())
+    stdio.println(conn.readAll().decode())
+    conn.write("reply\nsecond line\n")
+    conn.close()
+    stdio.println(client.readLine())
+    stdio.println(client.readLine())
+    stdio.println(client.readLine() ?? "closed by peer")
+    stdio.println(conn.isOpen())
+    try {
+        conn.write("late")
+    } catch (IllegalStateException e) {
+        stdio.println(e.getMessage())
+    }
+    client.setTimeout(50)
+    TcpSocket idle = new TcpSocket("127.0.0.1", port)
+    TcpSocket idleConn = server.accept()
+    idle.setTimeout(50)
+    try {
+        idle.read(10)
+    } catch (TimeoutException e) {
+        stdio.println("read timed out")
+    }
+    server.close()
+
+    // UDP
+    UdpSocket a = new UdpSocket()
+    UdpSocket b = new UdpSocket("127.0.0.1", 0)
+    a.send("ping", "127.0.0.1", b.port())
+    UdpPacket p = b.receive(1024)
+    stdio.println(f"{p.text()} from port match: {p.port() == a.port()}")
+    b.send(&"pong".encode(), p.address(), p.port())
+    stdio.println(a.receive(1024).text())
+    b.setTimeout(30)
+    try {
+        b.receive(16)
+    } catch (TimeoutException e) {
+        stdio.println("receive timed out")
+    }
+
+    try {
+        new TcpSocket("127.0.0.1", 70000)
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+    try {
+        Http.get("not a url")
+    } catch (IllegalArgumentException e) {
+        stdio.println("bad url: IllegalArgumentException")
+    }
+}

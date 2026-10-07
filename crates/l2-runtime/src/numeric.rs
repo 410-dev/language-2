@@ -415,15 +415,22 @@ enum Nums {
     Other(Vec<Value>),
 }
 
-fn unbox(items: &[Value]) -> Nums {
-    match items.first() {
-        Some(Value::Int(t, _)) if items.iter().all(|v| matches!(v, Value::Int(u, _) if u == t)) => {
-            Nums::Int(*t, items.iter().map(|v| if let Value::Int(_, x) = v { *x } else { 0 }).collect())
-        }
-        Some(Value::Float(t, _)) if items.iter().all(|v| matches!(v, Value::Float(u, _) if u == t)) => {
-            Nums::Float(*t, items.iter().map(|v| if let Value::Float(_, x) = v { *x } else { 0.0 }).collect())
-        }
-        _ => Nums::Other(items.iter().map(|v| v.deref()).collect()),
+fn unbox(items: &Items) -> Nums {
+    match items {
+        Items::U8(v) => Nums::Int(IntTy::U8, v.iter().map(|&x| x as i128).collect()),
+        Items::Int(IntTy::U64, v) => Nums::Int(IntTy::U64, v.iter().map(|&x| x as u64 as i128).collect()),
+        Items::Int(t, v) => Nums::Int(*t, v.iter().map(|&x| x as i128).collect()),
+        Items::Float(t, v) => Nums::Float(*t, v.clone()),
+        other => Nums::Other(other.iter().map(|v| v.deref()).collect()),
+    }
+}
+
+/// Packs kernel results.
+fn ints(t: IntTy, v: Vec<i128>) -> Items {
+    match t {
+        IntTy::U8 => Items::U8(v.into_iter().map(|x| x as u8).collect()),
+        IntTy::U64 => Items::Int(t, v.into_iter().map(|x| x as u64 as i64).collect()),
+        _ => Items::Int(t, v.into_iter().map(|x| x as i64).collect()),
     }
 }
 
@@ -503,21 +510,21 @@ pub fn zip<H: Host>(op: ArithOp, a: &Value, b: &Value, wrap: bool, threads: i128
     let items = match (unbox(&a.items), unbox(&b.items)) {
         (Nums::Int(t, x), Nums::Int(u, y)) if t == u => {
             let r = run_chunks(n, workers, &|rg: Range<usize>| rg.map(|i| int_op(op, t, x[i], y[i], wrap).map_err(|e| (i, e.0, e.1))).collect());
-            r.map_err(|e| kerr(e, h))?.into_iter().map(|v| Value::Int(t, v)).collect()
+            ints(t, r.map_err(|e| kerr(e, h))?)
         }
         (Nums::Float(t, x), Nums::Float(u, y)) if t == u => {
             let r = run_chunks(n, workers, &|rg: Range<usize>| Ok(rg.map(|i| ops::float_arith(op, t, x[i], y[i])).collect()));
-            r.map_err(|e| kerr(e, h))?.into_iter().map(|v| Value::Float(t, v)).collect()
+            Items::Float(t, r.map_err(|e| kerr(e, h))?)
         }
         _ => {
             let mut out = Vec::with_capacity(n);
             for (x, y) in a.items.iter().zip(b.items.iter()) {
                 out.push(ops::arith(op, &x.deref(), &y.deref(), wrap, h)?);
             }
-            out
+            Items::from_values(out)
         }
     };
-    Ok(Value::array(items, a.fixed))
+    Ok(Value::packed(items, a.fixed))
 }
 
 /// `a op s` (or `s op a` when `scalar_left`) for every element.
@@ -532,12 +539,12 @@ pub fn scalar<H: Host>(op: ArithOp, a: &Value, s: &Value, scalar_left: bool, wra
             let r = run_chunks(n, workers, &|rg: Range<usize>| {
                 rg.map(|i| if scalar_left { int_op(op, t, y, x[i], wrap) } else { int_op(op, t, x[i], y, wrap) }.map_err(|e| (i, e.0, e.1))).collect()
             });
-            r.map_err(|e| kerr(e, h))?.into_iter().map(|v| Value::Int(t, v)).collect()
+            ints(t, r.map_err(|e| kerr(e, h))?)
         }
         (Nums::Float(t, x), Value::Float(u, y)) if t == *u => {
             let y = *y;
             let r = run_chunks(n, workers, &|rg: Range<usize>| Ok(rg.map(|i| if scalar_left { ops::float_arith(op, t, y, x[i]) } else { ops::float_arith(op, t, x[i], y) }).collect()));
-            r.map_err(|e| kerr(e, h))?.into_iter().map(|v| Value::Float(t, v)).collect()
+            Items::Float(t, r.map_err(|e| kerr(e, h))?)
         }
         _ => {
             let mut out = Vec::with_capacity(n);
@@ -545,10 +552,10 @@ pub fn scalar<H: Host>(op: ArithOp, a: &Value, s: &Value, scalar_left: bool, wra
                 let x = x.deref();
                 out.push(if scalar_left { ops::arith(op, &s, &x, wrap, h)? } else { ops::arith(op, &x, &s, wrap, h)? });
             }
-            out
+            Items::from_values(out)
         }
     };
-    Ok(Value::array(items, a.fixed))
+    Ok(Value::packed(items, a.fixed))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -560,7 +567,7 @@ pub fn matmul<H: Host>(a: &Value, b: &Value, n: usize, k: usize, m: usize, wrap:
         return Err(h.throw(ExcKind::IllegalArgument, format!("matmul shape mismatch: {}x{} * {}x{}", n, k, k, m)));
     }
     let workers = worker_count(threads, n.saturating_mul(k).saturating_mul(m), n);
-    let items: Vec<Value> = match (unbox(&a.items), unbox(&b.items)) {
+    let items: Items = match (unbox(&a.items), unbox(&b.items)) {
         (Nums::Int(t, x), Nums::Int(u, y)) if t == u => {
             // row i of the result accumulates the products for p = 0, 1, ... in order while
             // streaming through row p of b (cache friendly; same sums as the dot-product order)
@@ -583,7 +590,7 @@ pub fn matmul<H: Host>(a: &Value, b: &Value, n: usize, k: usize, m: usize, wrap:
                 }
                 Ok(out)
             });
-            rows.map_err(|e| kerr(e, h))?.into_iter().map(|v| Value::Int(t, v)).collect()
+            ints(t, rows.map_err(|e| kerr(e, h))?)
         }
         (Nums::Float(t, x), Nums::Float(u, y)) if t == u => {
             let rows = run_chunks(n, workers, &|rg: Range<usize>| {
@@ -609,24 +616,24 @@ pub fn matmul<H: Host>(a: &Value, b: &Value, n: usize, k: usize, m: usize, wrap:
                 }
                 Ok(out)
             });
-            rows.map_err(|e| kerr(e, h))?.into_iter().map(|v| Value::Float(t, v)).collect()
+            Items::Float(t, rows.map_err(|e| kerr(e, h))?)
         }
         _ => {
             let mut out = Vec::with_capacity(n * m);
             for i in 0..n {
                 for j in 0..m {
-                    let mut acc = ops::arith(ArithOp::Mul, &a.items[i * k].deref(), &b.items[j].deref(), wrap, h)?;
+                    let mut acc = ops::arith(ArithOp::Mul, &a.items.get(i * k).deref(), &b.items.get(j).deref(), wrap, h)?;
                     for p in 1..k {
-                        let prod = ops::arith(ArithOp::Mul, &a.items[i * k + p].deref(), &b.items[p * m + j].deref(), wrap, h)?;
+                        let prod = ops::arith(ArithOp::Mul, &a.items.get(i * k + p).deref(), &b.items.get(p * m + j).deref(), wrap, h)?;
                         acc = ops::arith(ArithOp::Add, &acc, &prod, wrap, h)?;
                     }
                     out.push(acc);
                 }
             }
-            out
+            Items::from_values(out)
         }
     };
-    Ok(Value::array(items, a.fixed))
+    Ok(Value::packed(items, a.fixed))
 }
 
 /// Rounds every element (`round` / `ceil` / `floor` with the number method's arguments).
@@ -634,10 +641,10 @@ pub fn round_all<H: Host>(a: &Value, spec: RoundSpec, mode: RoundMode, wrap: boo
     let a = arr_items(a, h)?;
     let n = a.items.len();
     let workers = worker_count(threads, n.saturating_mul(16), n);
-    let items: Vec<Value> = match unbox(&a.items) {
+    let items: Items = match unbox(&a.items) {
         Nums::Float(t, x) => {
             let r = run_chunks(n, workers, &|rg: Range<usize>| Ok(rg.map(|i| round_float(x[i], t, spec, mode)).collect()));
-            r.map_err(|e| kerr(e, h))?.into_iter().map(|v| Value::Float(t, v)).collect()
+            Items::Float(t, r.map_err(|e| kerr(e, h))?)
         }
         Nums::Int(t, x) => {
             let r = run_chunks(n, workers, &|rg: Range<usize>| {
@@ -648,17 +655,17 @@ pub fn round_all<H: Host>(a: &Value, spec: RoundSpec, mode: RoundMode, wrap: boo
                 })
                 .collect()
             });
-            r.map_err(|e| kerr(e, h))?.into_iter().map(|v| Value::Int(t, v)).collect()
+            ints(t, r.map_err(|e| kerr(e, h))?)
         }
         Nums::Other(vs) => {
             let mut out = Vec::with_capacity(n);
             for v in &vs {
                 out.push(round_value(v, spec, mode, wrap, h)?);
             }
-            out
+            Items::from_values(out)
         }
     };
-    Ok(Value::array(items, a.fixed))
+    Ok(Value::packed(items, a.fixed))
 }
 
 /// Converts every element to the numeric type `to` (spec: Tensor.migrate).
@@ -667,17 +674,17 @@ pub fn migrate_all<H: Host>(a: &Value, to: &RtType, mode: RoundMode, threads: i1
     let n = a.items.len();
     let workers = worker_count(threads, n.saturating_mul(8), n);
     // plain numbers only on the workers: (int type, ints) or (float type, floats)
-    let (ints, floats) = match unbox(&a.items) {
+    let (int_vals, floats) = match unbox(&a.items) {
         Nums::Int(t, x) => (Some((t, x)), None),
         Nums::Float(t, x) => (None, Some((t, x))),
         Nums::Other(_) => (None, None),
     };
-    let items: Vec<Value> = match to {
-        RtType::Int(_) | RtType::Float(_) if ints.is_some() || floats.is_some() => {
+    let items: Items = match to {
+        RtType::Int(_) | RtType::Float(_) if int_vals.is_some() || floats.is_some() => {
             let r = run_chunks(n, workers, &|rg: Range<usize>| {
                 let mut out = Vec::with_capacity(rg.len());
                 for i in rg {
-                    let v = match (&ints, &floats) {
+                    let v = match (&int_vals, &floats) {
                         (Some((t, x)), _) => Value::Int(*t, x[i]),
                         (_, Some((t, x))) => Value::Float(*t, x[i]),
                         _ => Value::Null,
@@ -693,20 +700,20 @@ pub fn migrate_all<H: Host>(a: &Value, to: &RtType, mode: RoundMode, threads: i1
             });
             let r = r.map_err(|e| kerr(e, h))?;
             match to {
-                RtType::Int(t) => r.into_iter().map(|(x, _)| Value::Int(*t, x)).collect(),
-                RtType::Float(t) => r.into_iter().map(|(_, f)| Value::Float(*t, f)).collect(),
+                RtType::Int(t) => ints(*t, r.into_iter().map(|(x, _)| x).collect()),
+                RtType::Float(t) => Items::Float(*t, r.into_iter().map(|(_, f)| f).collect()),
                 _ => unreachable!(),
             }
         }
         _ => {
             let mut out = Vec::with_capacity(n);
-            for v in &a.items {
-                out.push(migrate_value(v, to, mode, h)?);
+            for v in a.items.iter() {
+                out.push(migrate_value(&v, to, mode, h)?);
             }
-            out
+            Items::from_values(out)
         }
     };
-    Ok(Value::array(items, a.fixed))
+    Ok(Value::packed(items, a.fixed))
 }
 
 /// Transposes a row-major `rows × cols` array.
@@ -715,13 +722,15 @@ pub fn transpose<H: Host>(a: &Value, rows: usize, cols: usize, h: &mut H) -> Res
     if a.items.len() != rows * cols {
         return Err(h.throw(ExcKind::IllegalArgument, format!("transpose shape mismatch: {} elements for {}x{}", a.items.len(), rows, cols)));
     }
-    let mut out = Vec::with_capacity(rows * cols);
-    for j in 0..cols {
-        for i in 0..rows {
-            out.push(a.items[i * cols + j].clone());
-        }
-    }
-    Ok(Value::array(out, a.fixed))
+    let idx = (0..cols).flat_map(|j| (0..rows).map(move |i| i * cols + j));
+    let items = match &a.items {
+        Items::U8(v) => Items::U8(idx.map(|i| v[i]).collect()),
+        Items::Int(t, v) => Items::Int(*t, idx.map(|i| v[i]).collect()),
+        Items::Float(t, v) => Items::Float(*t, idx.map(|i| v[i]).collect()),
+        Items::Bool(v) => Items::Bool(idx.map(|i| v[i]).collect()),
+        Items::Vals(v) => Items::Vals(idx.map(|i| v[i].clone()).collect()),
+    };
+    Ok(Value::packed(items, a.fixed))
 }
 
 #[cfg(test)]

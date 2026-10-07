@@ -10,8 +10,8 @@ file_extensions:
 variables:
   ident: '[A-Za-z_]\w*'
   primitive: '\b(?:void|Boolean|Byte|Int|Int8|Int16|Int32|Int64|IntLarge|UInt|UInt8|UInt16|UInt32|UInt64|Float|Float16|Float32|Float64)\b'
-  builtin_type: '\b(?:String|Dictionary|Function|DTVariable|STVariable|Droppable|Comparable|Numeric|List)\b'
-  exception: '\b(?:Throwable|Error|Exception|RuntimeException|IOException|NullPointerException|ArithmeticException|ClassCastException|IndexOutOfBoundsException|IllegalArgumentException)\b'
+  builtin_type: '\b(?:String|Dictionary|Function|DTVariable|STVariable|Droppable|Comparable|Numeric|Bytes|List)\b'
+  exception: '\b(?:Throwable|Error|Exception|RuntimeException|IOException|NullPointerException|ArithmeticException|ClassCastException|IndexOutOfBoundsException|IllegalArgumentException|IllegalStateException|UnsupportedOperationException|FileNotFoundException|TimeoutException|CryptographyException)\b'
 
 contexts:
   main:

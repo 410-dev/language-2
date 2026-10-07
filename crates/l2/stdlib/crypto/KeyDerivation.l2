@@ -1,0 +1,23 @@
+@using sdk 1
+
+// crypto.KeyDerivation: keys from passwords (PBKDF2) and from other keys (HKDF) (spec 14.11).
+
+using intrinsics as intr
+
+public class KeyDerivation {
+    // PBKDF2-HMAC with `hash` ("SHA-256", "SHA-384", "SHA-512" or "SHA-1"); for passwords use a
+    // random salt (Bytes.random(16)) and a high iteration count (600000 for SHA-256)
+    public static function Bytes pbkdf2(&String hash, &Bytes password, &Bytes salt, Int64 iterations, Int64 length) {
+        return new Bytes(intr.pbkdf2(hash, password.toArray(), salt.toArray(), iterations, length))
+    }
+
+    public static function Bytes pbkdf2(&String password, &Bytes salt, Int64 iterations, Int64 length) {
+        return new Bytes(intr.pbkdf2("SHA-256", intr.strEncode(password, "utf-8"), salt.toArray(), iterations, length))
+    }
+
+    // HKDF with `hash` ("SHA-256", "SHA-384" or "SHA-512"): derives keys from key material
+    // that is already random (not from passwords)
+    public static function Bytes hkdf(&String hash, &Bytes keyMaterial, &Bytes salt, &Bytes info, Int64 length) {
+        return new Bytes(intr.hkdf(hash, keyMaterial.toArray(), salt.toArray(), info.toArray(), length))
+    }
+}

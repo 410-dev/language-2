@@ -1,0 +1,80 @@
+// Array methods (spec 13.3): growing, slicing, searching and higher-order methods.
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+
+class Item {
+    public String name
+    public Int64 price
+    public Item(String name, Int64 price) {
+        this.name = name
+        this.price = price
+    }
+}
+
+function void main() {
+    Int64[] xs = [5, 3, 8]
+    xs.add(1)
+    xs.append(9)
+    xs.push(2)
+    stdio.println(xs)
+    stdio.println(f"pop {xs.pop()} -> {xs}")
+    xs.addAll([7, 7])
+    stdio.println(f"slice {xs.slice(1, 3)} {xs.slice(-2)} index {xs.indexOf(7)} last {xs.lastIndexOf(7)} missing {xs.indexOf(42)}")
+    stdio.println(xs.concat([100]))
+    stdio.println(xs + [0])
+    stdio.println(xs.join(" | "))
+
+    // higher-order methods: (value) or (index, value)
+    stdio.println(xs.map((x) -> x * 10))
+    stdio.println(xs.map((Int64 i, Int64 x) -> f"{i}:{x}"))
+    stdio.println(xs.filter((x) -> x % 2 == 1))
+    stdio.println(xs.filter((i, x) -> i < 3 and x > 3))
+    stdio.println(xs.reduce(0, (acc, x) -> acc + x))
+    stdio.println(xs.reduce("", (String acc, Int64 i, Int64 x) -> acc + (i == 0 ? "" : ",") + x))
+    stdio.println(f"find {xs.find((x) -> x > 7)} none {xs.find((x) -> x > 100)} at {xs.findIndex((x) -> x == 8)}")
+    stdio.println(f"any {xs.any((x) -> x > 8)} all {xs.all((x) -> x > 0)} count {xs.count((x) -> x == 7)}")
+    Int64 total = 0
+    xs.forEach((x) -> { total += x })
+    stdio.println(f"total {total}")
+
+    xs.sortBy((a, b) -> b - a)
+    stdio.println(f"descending {xs}")
+    xs.clear()
+    stdio.println(f"cleared {xs} {xs.isEmpty()}")
+
+    // objects: elements are borrowed by untyped parameters
+    Item[] items = [new Item("pen", 3), new Item("book", 12), new Item("cup", 5)]
+    String[] names = items.map((it) -> it.name.clone())
+    stdio.println(names)
+    Item[] cheap = items.filter((it) -> it.price < 10)
+    stdio.println(cheap)
+    items.sortBy((&Item a, &Item b) -> a.price - b.price)
+    stdio.println(items.map((it) -> it.name.clone()))
+    stdio.println(items.reduce(0, (acc, it) -> acc + it.price))
+    Item? book = items.find((it) -> it.name == "book")
+    stdio.println(book!.price)
+
+    String[] words = ["pear", "fig", "banana"]
+    words.sortBy((String a, String b) -> a.length() - b.length())
+    stdio.println(words)
+    stdio.println(words.map((w) -> w.length()))
+
+    Function[(Int64), Boolean] even = (x) -> x % 2 == 0
+    stdio.println([1, 2, 3, 4].filter(even))
+
+    // errors
+    try {
+        Int64[] empty = Int64.array()
+        empty.pop()
+    } catch (IndexOutOfBoundsException e) {
+        stdio.println(f"error: {e.getMessage()}")
+    }
+    try {
+        Int64[] fixed = Int64.array(2, true)
+        fixed.add(1)
+    } catch (UnsupportedOperationException e) {
+        stdio.println(f"error: {e.getMessage()}")
+    }
+}

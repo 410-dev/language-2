@@ -1,0 +1,5 @@
+// error: the function of Int64[].map takes (value) or (index, value)
+function void main() {
+    Int64[] xs = [1, 2]
+    xs.map((a, b, c) -> a)
+}
