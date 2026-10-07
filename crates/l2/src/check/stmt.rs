@@ -49,6 +49,7 @@ impl<'a> Checker<'a> {
             };
             let name = sig.param_names[i].clone();
             let id = self.declare(&name, t.clone(), pspan, imm, copied, true);
+            self.ide_mark_param(id);
             params.push(id);
         }
         let body: Vec<HStmt> = match job.kind {

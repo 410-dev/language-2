@@ -5,6 +5,7 @@
 using stdio as stdio
 using math.linear.Matrix as Matrix
 using math.linear.Vector as Vector
+using system.Platform as Platform
 
 function void main() {
     Matrix a = new Matrix([[1, 2, 3], [4, 5, 6]])
@@ -33,9 +34,10 @@ function void main() {
     Matrix[Int32] counts = c.migrate[Int32]()
     stdio.println(f"C as Int32, squared:\n{counts ** 2}")
 
-    try {
-        a * a
-    } catch (IllegalArgumentException e) {
-        stdio.println(f"error: {e.getMessage()}")
-    }
+    Platform p = new Platform()
+    PlatformTask pt = new PlatformTask()
+    
 }
+
+
+

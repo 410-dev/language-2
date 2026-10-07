@@ -81,6 +81,9 @@ impl<'a> Checker<'a> {
         if owned && !ty.is_copy() && !matches!(ty, Type::Ref(..)) {
             scope.owned.push(id);
         }
+        if self.ide.is_some() {
+            self.ide_local_decl(id, span);
+        }
         id
     }
 
@@ -659,12 +662,21 @@ impl<'a> Checker<'a> {
     }
 
     fn ident(&mut self, name: &str, span: Span) -> HExpr {
+        if self.ide.is_some() {
+            self.ide_target_ident(name, span, false);
+        }
         if let Some(id) = self.lookup_local(name) {
+            if self.ide.is_some() {
+                self.ide_local_use(id, span);
+            }
             return self.local_read(id, span);
         }
         // implicit field / static field of the current class
         if let Some(c) = self.current_class() {
             if let Some(idx) = self.field_index(c, name) {
+                if self.ide.is_some() {
+                    self.ide_field_use(c, idx, span);
+                }
                 if self.in_static_context() {
                     self.err(span, format!("instance field '{}' cannot be used in a static context", name));
                     return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
@@ -674,6 +686,9 @@ impl<'a> Checker<'a> {
                 return HExpr::new(H::Field(Box::new(this), idx), ty, span);
             }
             if let Some(s) = self.find_static(c, name) {
+                if self.ide.is_some() {
+                    self.ide_static_use(c, name, &s, span);
+                }
                 let ty = self.globals[s.global as usize].ty.clone();
                 return HExpr::new(H::Global(s.global), ty, span);
             }
@@ -681,6 +696,11 @@ impl<'a> Checker<'a> {
         // function as a value
         let m = self.current_module();
         if let Some(fs) = self.lookup_funcs(m, name) {
+            if self.ide.is_some() {
+                self.ide_call_push(Some(span), name);
+                self.ide_function_called(&fs[0], None);
+                self.ide_call_pop();
+            }
             if fs.len() == 1 {
                 if let Some(f) = fs[0].func {
                     let sig = self.sigs[f as usize].clone();
@@ -803,7 +823,13 @@ impl<'a> Checker<'a> {
     pub fn place_of(&mut self, e: &'a ast::Expr) -> Option<(Place, Type, bool, String)> {
         match &e.kind {
             A::Ident(name) => {
+                if self.ide.is_some() {
+                    self.ide_target_ident(name, e.span, false);
+                }
                 if let Some(id) = self.lookup_local(name) {
+                    if self.ide.is_some() {
+                        self.ide_local_use(id, e.span);
+                    }
                     let ty = self.local_ty(id);
                     return Some(match ty {
                         Type::Ref(true, t) => (Place::Deref(id), *t, true, String::new()),
@@ -816,6 +842,9 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(c) = self.current_class() {
                     if let Some(idx) = self.field_index(c, name) {
+                        if self.ide.is_some() {
+                            self.ide_field_use(c, idx, e.span);
+                        }
                         if self.in_static_context() {
                             return None;
                         }
@@ -823,6 +852,9 @@ impl<'a> Checker<'a> {
                         return Some(self.field_place(this, c, idx, name));
                     }
                     if let Some(s) = self.find_static(c, name) {
+                        if self.ide.is_some() {
+                            self.ide_static_use(c, name, &s, e.span);
+                        }
                         let ty = self.globals[s.global as usize].ty.clone();
                         let ok = !s.immutable || self.cur_ref().kind == FuncKind::Init;
                         return Some((Place::Global(s.global), ty, ok, format!("static field '{}' is Immutable", name)));
@@ -831,8 +863,13 @@ impl<'a> Checker<'a> {
                 None
             }
             A::Member(obj, name) => {
+                let pos = if self.ide.is_some() { self.ide_member_pos(e.span) } else { None };
+                self.ide_target_member(obj, name, pos, false);
                 if let Some(c) = self.static_class_of(obj, None) {
                     if let Some(s) = self.find_static(c, name) {
+                        if let Some(p) = pos {
+                            self.ide_static_use(c, name, &s, p);
+                        }
                         self.check_access(s.access, c, e.span, name);
                         let ty = self.globals[s.global as usize].ty.clone();
                         return Some((Place::Global(s.global), ty, !s.immutable, format!("static field '{}' is Immutable", name)));
@@ -841,6 +878,9 @@ impl<'a> Checker<'a> {
                 let o = self.expr(obj, None);
                 if let Type::Class(c) = o.ty.deref().clone() {
                     if let Some(idx) = self.field_index(c, name) {
+                        if let Some(p) = pos {
+                            self.ide_field_use(c, idx, p);
+                        }
                         let fm = self.cmeta[c as usize].fields[idx as usize].clone();
                         self.check_access(fm.access, fm.owner, e.span, name);
                         return Some(self.field_place(o, c, idx, name));
@@ -1283,9 +1323,14 @@ impl<'a> Checker<'a> {
     }
 
     fn member(&mut self, obj: &'a ast::Expr, name: &str, span: Span) -> HExpr {
+        let pos = if self.ide.is_some() { self.ide_member_pos(span) } else { None };
+        self.ide_target_member(obj, name, pos, false);
         // static access: Class.field / pkg.Class.field / Type.CONST
         if let Some(c) = self.static_class_of(obj, None) {
             if let Some(s) = self.find_static(c, name) {
+                if let Some(p) = pos {
+                    self.ide_static_use(c, name, &s, p);
+                }
                 self.check_access(s.access, c, span, name);
                 let ty = self.globals[s.global as usize].ty.clone();
                 return HExpr::new(H::Global(s.global), ty, span);
@@ -1297,6 +1342,10 @@ impl<'a> Checker<'a> {
         if let A::Ident(cn) = &obj.kind {
             if self.lookup_local(cn).is_none() {
                 if is_builtin_type_name(cn) {
+                    if let Some(p) = pos {
+                        self.ide_builtin_type_use(cn, obj.span);
+                        self.ide_static_builtin_at(&[crate::ide::builtins::Recv::NumStatic], cn, name, 0, p);
+                    }
                     if let Some(e) = self.builtin_static_const(cn, name, span) {
                         return e;
                     }
@@ -1313,6 +1362,9 @@ impl<'a> Checker<'a> {
         match o.ty.deref().clone() {
             Type::Class(c) => {
                 if let Some(idx) = self.field_index(c, name) {
+                    if let Some(p) = pos {
+                        self.ide_field_use(c, idx, p);
+                    }
                     let fm = self.cmeta[c as usize].fields[idx as usize].clone();
                     self.check_access(fm.access, fm.owner, span, name);
                     let ty = self.classes[c as usize].fields[idx as usize].ty.clone();
@@ -1391,6 +1443,7 @@ impl<'a> Checker<'a> {
         let mut pids = Vec::new();
         for (p, t) in params.iter().zip(ptys.iter()) {
             let id = self.declare(&p.name, t.clone(), p.span, p.mods.immutable, p.mods.copied, true);
+            self.ide_mark_param(id);
             pids.push(id);
         }
         let body_stmts = match body {
@@ -1616,6 +1669,31 @@ impl<'a> Checker<'a> {
     }
 
     pub fn call(&mut self, callee: &'a ast::Expr, args: &'a [ast::Arg], expected: Option<&Type>, span: Span) -> HExpr {
+        if self.ide.is_some() {
+            // remember the callee's name so the resolved function / method can be recorded
+            match &callee.kind {
+                A::Ident(name) => {
+                    self.ide_target_ident(name, callee.span, true);
+                    if let Some(id) = self.lookup_local(name) {
+                        self.ide_local_use(id, callee.span);
+                    }
+                    self.ide_call_push(Some(callee.span), name);
+                }
+                A::Member(obj, name) => {
+                    let pos = self.ide_member_pos(callee.span);
+                    self.ide_target_member(obj, name, pos, true);
+                    self.ide_call_push(pos, name);
+                }
+                _ => return self.call_inner(callee, args, expected, span),
+            }
+            let r = self.call_inner(callee, args, expected, span);
+            self.ide_call_pop();
+            return r;
+        }
+        self.call_inner(callee, args, expected, span)
+    }
+
+    fn call_inner(&mut self, callee: &'a ast::Expr, args: &'a [ast::Arg], expected: Option<&Type>, span: Span) -> HExpr {
         match &callee.kind {
             A::Ident(name) => self.call_ident(name, args, expected, span),
             A::Index(base, targs) => {
@@ -1740,7 +1818,12 @@ impl<'a> Checker<'a> {
                 })
                 .collect();
             let what = format!("'{}'", name);
-            return match self.select_overload(&cands, args, span, &what) {
+            let sel = self.select_overload(&cands, args, span, &what);
+            if self.ide.is_some() {
+                let k = sel.as_ref().map(|s| s.0).unwrap_or(0);
+                self.ide_function_called(&concrete[k], None);
+            }
+            return match sel {
                 Some((i, out)) => {
                     let fid = concrete[i].func.unwrap();
                     let sig = self.sigs[fid as usize].clone();
@@ -1783,6 +1866,9 @@ impl<'a> Checker<'a> {
         let Some(fid) = self.instantiate_generic(&fr, targs, span) else {
             return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
         };
+        if self.ide.is_some() {
+            self.ide_function_called(&fr, Some(fid));
+        }
         let sig = self.sigs[fid as usize].clone();
         let mut out = Vec::new();
         for (x, p) in pre.into_iter().zip(sig.params.iter()) {
@@ -1936,7 +2022,11 @@ impl<'a> Checker<'a> {
         let cands: Vec<Cand> = ctors.iter().map(|(_, p, n, _, _)| Cand { params: p.clone(), names: n.clone() }).collect();
         let cname = self.classes[c as usize].name.clone();
         let what = format!("constructor of '{}'", cname);
-        match self.select_overload(&cands, args, span, &what) {
+        let sel = self.select_overload(&cands, args, span, &what);
+        if self.ide.is_some() && !ctors.is_empty() {
+            self.ide_ctor_called(c, sel.as_ref().map(|s| s.0).unwrap_or(0));
+        }
+        match sel {
             Some((i, out)) => {
                 let (fid, _, _, access, throws) = ctors[i].clone();
                 self.check_access(access, c, span, &cname);
@@ -1957,6 +2047,9 @@ impl<'a> Checker<'a> {
         let cands = self.method_cands(&ms);
         let what = format!("method '{}'", ms[0].name);
         let Some((i, out)) = self.select_overload(&cands, args, span, &what) else {
+            if self.ide.is_some() {
+                self.ide_method_called(&ms[0]);
+            }
             return HExpr::new(H::Lit(Lit::Null), ms[0].ret.clone(), span);
         };
         let m = ms[i].clone();
@@ -1965,6 +2058,9 @@ impl<'a> Checker<'a> {
 
     /// Emits a call of a selected method (`recv` is `None` for static calls).
     pub fn emit_method(&mut self, m: &MethodInfo, recv: Option<HExpr>, out: Vec<HExpr>, span: Span, direct: bool) -> HExpr {
+        if self.ide.is_some() {
+            self.ide_method_called(m);
+        }
         if let Owner::Class(oc) = m.owner {
             self.check_access(m.access, oc, span, &m.name);
         }
@@ -2125,8 +2221,16 @@ impl<'a> Checker<'a> {
                 // module-qualified call
                 if let Some(imp) = self.modules[module].imports.get(n).cloned() {
                     if self.current_class().and_then(|c| self.field_index(c, n)).is_none() {
+                        if self.ide.is_some() {
+                            self.ide_module_use(n, &imp, obj.span);
+                        }
                         return match imp {
-                            Import::Stdio => self.stdio_call(name, args, span),
+                            Import::Stdio => {
+                                if self.ide.is_some() {
+                                    self.ide_static_builtin_called(&[crate::ide::builtins::Recv::Stdio], "stdio", name, args.len());
+                                }
+                                self.stdio_call(name, args, span)
+                            }
                             Import::Intrinsics => self.intrinsic_call(name, None, args, span),
                             Import::Module(mi) => {
                                 let ty = qualify(&self.modules[mi].package, name);
@@ -2169,6 +2273,12 @@ impl<'a> Checker<'a> {
                     }
                 }
                 if is_builtin_type_name(n) {
+                    if self.ide.is_some() {
+                        use crate::ide::builtins::Recv;
+                        self.ide_builtin_type_use(n, obj.span);
+                        let recvs = if n == "String" { vec![Recv::StrStatic] } else { vec![Recv::NumStatic, Recv::IntClassStatic] };
+                        self.ide_static_builtin_called(&recvs, n, name, args.len());
+                    }
                     return self.builtin_static_call(n, name, args, expected, span);
                 }
             }
@@ -2256,6 +2366,9 @@ impl<'a> Checker<'a> {
             }
             Type::Error => return recv,
             _ => {}
+        }
+        if self.ide.is_some() {
+            self.ide_builtin_called(&recv.ty, name, args.len());
         }
         let nd = self.diags.len();
         if let Some(e) = self.builtin_method(obj, recv.clone(), name, args, expected, span) {

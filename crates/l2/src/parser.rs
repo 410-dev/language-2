@@ -8,6 +8,10 @@ pub struct Parser {
     toks: Vec<Token>,
     pos: usize,
     file: u32,
+    /// Error recovery (editor tooling): a broken statement, member or item is reported and
+    /// skipped instead of ending the parse.
+    recover: bool,
+    errors: Vec<Diag>,
 }
 
 type PResult<T> = Result<T, Diag>;
@@ -15,8 +19,22 @@ type PResult<T> = Result<T, Diag>;
 const DIRECTIVES: &[&str] = &["using", "runtime", "compiler", "runtimecfg"];
 
 pub fn parse_file(toks: Vec<Token>, file: u32) -> PResult<FileAst> {
-    let mut p = Parser { toks, pos: 0, file };
+    let mut p = Parser { toks, pos: 0, file, recover: false, errors: Vec::new() };
     p.file_ast()
+}
+
+/// Parses with error recovery: every syntax error is reported and the rest of the file is
+/// still parsed (statements, class members and items containing errors are left out).
+pub fn parse_file_recovering(toks: Vec<Token>, file: u32) -> (FileAst, Vec<Diag>) {
+    let mut p = Parser { toks, pos: 0, file, recover: true, errors: Vec::new() };
+    let f = match p.file_ast() {
+        Ok(f) => f,
+        Err(d) => {
+            p.errors.push(d);
+            FileAst { file, directives: Vec::new(), items: Vec::new() }
+        }
+    };
+    (f, p.errors)
 }
 
 impl Parser {
@@ -96,6 +114,68 @@ impl Parser {
         }
     }
 
+    // ------------------------------------------------------------------ error recovery
+    /// With recovery on, records `e` and returns `None`; otherwise passes it on.
+    fn recovered<T>(&mut self, r: PResult<T>) -> PResult<Option<T>> {
+        match r {
+            Ok(v) => Ok(Some(v)),
+            Err(d) if self.recover => {
+                self.errors.push(d);
+                Ok(None)
+            }
+            Err(d) => Err(d),
+        }
+    }
+
+    /// Skips the rest of a broken statement or member that started at token `start`: up to and
+    /// including the next line end outside braces, or up to the `}` closing the enclosing block.
+    fn sync_stmt(&mut self, start: usize) {
+        if self.pos == start && !self.at(&Tok::Eof) && !self.at(&Tok::RBrace) {
+            self.bump();
+        }
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                Tok::Eof => return,
+                Tok::LBrace => depth += 1,
+                Tok::RBrace if depth == 0 => return,
+                Tok::RBrace => depth -= 1,
+                Tok::Newline | Tok::Semi if depth == 0 => {
+                    self.bump();
+                    return;
+                }
+                _ => {}
+            }
+            self.bump();
+        }
+    }
+
+    /// Skips a broken top-level item: to the next line that starts outside braces with a token
+    /// that can begin an item.
+    fn sync_item(&mut self, start: usize) {
+        if self.pos == start && !self.at(&Tok::Eof) {
+            self.bump();
+        }
+        let mut depth = 0usize;
+        let mut line_start = false;
+        loop {
+            let t = self.peek().clone();
+            if t == Tok::Eof {
+                return;
+            }
+            if depth == 0 && line_start && matches!(t, Tok::Function | Tok::Class | Tok::Interface | Tok::Using | Tok::Public | Tok::Private | Tok::Protected | Tok::Static | Tok::At(_)) {
+                return;
+            }
+            line_start = matches!(t, Tok::Newline | Tok::Semi);
+            match t {
+                Tok::LBrace => depth += 1,
+                Tok::RBrace => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            self.bump();
+        }
+    }
+
     // ------------------------------------------------------------------ file level
     fn file_ast(&mut self) -> PResult<FileAst> {
         let mut directives = Vec::new();
@@ -105,17 +185,22 @@ impl Parser {
             if self.at(&Tok::Eof) {
                 break;
             }
+            let start = self.pos;
             if let Tok::At(name) = self.peek().clone() {
                 if DIRECTIVES.contains(&name.as_str()) {
-                    directives.push(self.directive()?);
+                    let r = self.directive();
+                    match self.recovered(r)? {
+                        Some(d) => directives.push(d),
+                        None => self.sync_item(start),
+                    }
                     continue;
                 }
             }
-            if self.at(&Tok::Using) {
-                items.push(Item::Using(self.using()?));
-                continue;
+            let r = if self.at(&Tok::Using) { self.using().map(Item::Using) } else { self.item() };
+            match self.recovered(r)? {
+                Some(it) => items.push(it),
+                None => self.sync_item(start),
             }
-            items.push(self.item()?);
         }
         Ok(FileAst { file: self.file, directives, items })
     }
@@ -426,29 +511,43 @@ impl Parser {
             if self.eat(&Tok::RBrace) {
                 break;
             }
-            let mspan = self.span();
-            let mods = self.mods()?;
-            match self.peek().clone() {
-                Tok::Function => c.methods.push(self.function(mods)?),
-                Tok::Ident(n) if n == c.name && self.peek_at(1) == &Tok::LParen => {
-                    self.bump();
-                    let params = self.params()?;
-                    let throws = self.throws()?;
-                    let body = self.block()?;
-                    self.end_stmt()?;
-                    c.ctors.push(CtorDecl { mods, params, throws, body, span: mspan });
-                }
-                _ => {
-                    let ty = self.parse_type()?;
-                    let name = self.ident()?;
-                    let init = if self.eat(&Tok::Assign) { Some(self.expr()?) } else { None };
-                    self.end_stmt()?;
-                    c.fields.push(FieldDecl { mods, ty, name, init, span: mspan });
-                }
+            if self.recover && self.at(&Tok::Eof) {
+                // keep what was parsed of an unclosed class
+                self.errors.push(Diag::error(span, "unclosed class body"));
+                return Ok(c);
+            }
+            let start = self.pos;
+            let r = self.class_member(&mut c);
+            if self.recovered(r)?.is_none() {
+                self.sync_stmt(start);
             }
         }
         self.end_stmt()?;
         Ok(c)
+    }
+
+    fn class_member(&mut self, c: &mut ClassDecl) -> PResult<()> {
+        let mspan = self.span();
+        let mods = self.mods()?;
+        match self.peek().clone() {
+            Tok::Function => c.methods.push(self.function(mods)?),
+            Tok::Ident(n) if n == c.name && self.peek_at(1) == &Tok::LParen => {
+                self.bump();
+                let params = self.params()?;
+                let throws = self.throws()?;
+                let body = self.block()?;
+                self.end_stmt()?;
+                c.ctors.push(CtorDecl { mods, params, throws, body, span: mspan });
+            }
+            _ => {
+                let ty = self.parse_type()?;
+                let name = self.ident()?;
+                let init = if self.eat(&Tok::Assign) { Some(self.expr()?) } else { None };
+                self.end_stmt()?;
+                c.fields.push(FieldDecl { mods, ty, name, init, span: mspan });
+            }
+        }
+        Ok(())
     }
 
     fn interface(&mut self, mods: Mods) -> PResult<InterfaceDecl> {
@@ -472,11 +571,16 @@ impl Parser {
             if self.eat(&Tok::RBrace) {
                 break;
             }
-            let mods = self.mods()?;
-            if !self.at(&Tok::Function) {
-                return Err(self.unexpected("'function' in interface body"));
+            if self.recover && self.at(&Tok::Eof) {
+                self.errors.push(Diag::error(span, "unclosed interface body"));
+                break;
             }
-            methods.push(self.function(mods)?);
+            let start = self.pos;
+            let r = self.mods().and_then(|mods| if self.at(&Tok::Function) { self.function(mods) } else { Err(self.unexpected("'function' in interface body")) });
+            match self.recovered(r)? {
+                Some(m) => methods.push(m),
+                None => self.sync_stmt(start),
+            }
         }
         self.end_stmt()?;
         Ok(InterfaceDecl { mods, name, type_params, extends, methods, span })
@@ -590,9 +694,19 @@ impl Parser {
                 break;
             }
             if self.at(&Tok::Eof) {
+                if self.recover {
+                    // keep the statements of an unclosed block
+                    self.errors.push(Diag::error(span, "unclosed block"));
+                    break;
+                }
                 return Err(Diag::error(span, "unclosed block"));
             }
-            stmts.push(self.stmt()?);
+            let start = self.pos;
+            let r = self.stmt();
+            match self.recovered(r)? {
+                Some(s) => stmts.push(s),
+                None => self.sync_stmt(start),
+            }
         }
         Ok(Block { stmts, span })
     }
@@ -1180,7 +1294,7 @@ impl Parser {
     /// Parses an expression embedded in an f-string.
     fn sub_expr(&self, src: &str, at: Span) -> PResult<Expr> {
         let toks = lex_at(src, self.file, at.line, at.col)?;
-        let mut sub = Parser { toks, pos: 0, file: self.file };
+        let mut sub = Parser { toks, pos: 0, file: self.file, recover: false, errors: Vec::new() };
         let e = sub.expr()?;
         sub.skip_newlines();
         if !sub.at(&Tok::Eof) {

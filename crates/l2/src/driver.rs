@@ -247,6 +247,141 @@ fn modules_for(path: &str, base: Option<&Path>) -> Vec<(String, Source)> {
     out
 }
 
+/// What [`analyze_for_ide`] checks: the text of one file and how it fits into its program.
+pub struct IdeInput<'a> {
+    /// Label (path) of the file.
+    pub path: String,
+    pub text: &'a str,
+    /// Directory that `using` paths are resolved against.
+    pub base: Option<&'a Path>,
+    /// Module name of the file (`pkg.Name`, or the file stem for a program's entry file).
+    pub module: String,
+    /// Package of the file; empty for an entry file.
+    pub package: String,
+    /// The file is a standard library module.
+    pub stdlib: bool,
+    /// The file is the prelude (it replaces the built-in one).
+    pub prelude: bool,
+    /// Unsaved editor contents, used instead of the files on disk.
+    pub overlays: &'a std::collections::HashMap<PathBuf, String>,
+}
+
+pub struct IdeAnalysis {
+    pub sources: SourceMap,
+    /// Source id of the analysed file.
+    pub file: u32,
+    pub ast: FileAst,
+    /// Errors and warnings of all files.
+    pub diags: Vec<Diag>,
+    pub rec: crate::check::ide::IdeRec,
+}
+
+/// Lexes with recovery: a line with a lexical error is reported and blanked out.
+fn lex_recovering(src: &str, id: u32) -> (Vec<crate::lexer::Token>, Vec<Diag>) {
+    let mut text = src.to_string();
+    let mut diags: Vec<Diag> = Vec::new();
+    for _ in 0..64 {
+        match crate::lexer::lex(&text, id) {
+            Ok(t) => return (t, diags),
+            Err(d) => {
+                let line = d.span.line as usize;
+                if line == 0 || diags.iter().any(|x| x.span.line as usize == line) {
+                    diags.push(d);
+                    break;
+                }
+                diags.push(d);
+                let blanked: Vec<String> = text
+                    .split('\n')
+                    .enumerate()
+                    .map(|(i, l)| if i + 1 == line { l.chars().map(|c| if c == '\r' { c } else { ' ' }).collect() } else { l.to_string() })
+                    .collect();
+                text = blanked.join("\n");
+            }
+        }
+    }
+    (crate::lexer::lex("", id).unwrap_or_default(), diags)
+}
+
+fn parse_recovering(sources: &mut SourceMap, path: String, src: String) -> (FileAst, Vec<Diag>) {
+    let id = sources.add(path, src.clone());
+    let (toks, mut diags) = lex_recovering(&src, id);
+    let (f, errs) = crate::parser::parse_file_recovering(toks, id);
+    diags.extend(errs);
+    (f, diags)
+}
+
+/// Checks one file for editor tooling (spec 15.4): syntax errors are recovered from, all
+/// diagnostics are collected, and `rec` records what the names of the file refer to.
+pub fn analyze_for_ide(input: &IdeInput, rec: impl FnOnce(u32) -> crate::check::ide::IdeRec) -> IdeAnalysis {
+    let mut sources = SourceMap::default();
+    let mut files = Vec::new();
+    let mut names = Vec::new();
+    let mut diags = Vec::new();
+    let (prelude_label, prelude_text) = if input.prelude { (input.path.clone(), input.text) } else { ("<prelude>".to_string(), PRELUDE) };
+    let (prelude, errs) = parse_recovering(&mut sources, prelude_label, prelude_text.into());
+    diags.extend(errs);
+    files.push(prelude);
+    names.push("<prelude>".to_string());
+    // the prelude is checked with an empty entry file
+    let (entry_label, entry_text) = if input.prelude { ("<entry>".to_string(), "") } else { (input.path.clone(), input.text) };
+    let (entry, errs) = parse_recovering(&mut sources, entry_label, entry_text.to_string());
+    let file = if input.prelude { 0 } else { entry.file };
+    diags.extend(errs);
+    files.push(entry);
+    names.push(input.module.clone());
+    let mut stdlib = vec![true, input.stdlib];
+    let read = |p: &Path| -> Option<String> {
+        if let Some(t) = input.overlays.get(p) {
+            return Some(t.clone());
+        }
+        std::fs::read_to_string(p).ok()
+    };
+    let load = |files: &mut Vec<FileAst>, names: &mut Vec<String>, stdlib: &mut Vec<bool>, sources: &mut SourceMap, diags: &mut Vec<Diag>, name: String, src: Source| -> bool {
+        if names.contains(&name) {
+            return false;
+        }
+        let (label, text, is_std) = match src {
+            Source::File(p) => match read(&p) {
+                Some(t) => (p.display().to_string(), t, false),
+                None => return false,
+            },
+            Source::Std(t) => (format!("<stdlib>/{}.{}", name.replace('.', "/"), SOURCE_EXT), t.to_string(), true),
+        };
+        let (f, errs) = parse_recovering(sources, label, text);
+        diags.extend(errs);
+        files.push(f);
+        names.push(name);
+        stdlib.push(is_std);
+        true
+    };
+    let mut queue: VecDeque<usize> = VecDeque::from([1]);
+    // the other modules of the file's own package are visible without `using`
+    if !input.package.is_empty() {
+        for (name, src) in package_modules(input.base, &input.package) {
+            if load(&mut files, &mut names, &mut stdlib, &mut sources, &mut diags, name, src) {
+                queue.push_back(files.len() - 1);
+            }
+        }
+    }
+    while let Some(i) = queue.pop_front() {
+        for path in imports_of(&files[i]) {
+            if path == "stdio" || path == "intrinsics" {
+                continue;
+            }
+            for (name, src) in modules_for(&path, input.base) {
+                if load(&mut files, &mut names, &mut stdlib, &mut sources, &mut diags, name, src) {
+                    queue.push_back(files.len() - 1);
+                }
+            }
+        }
+    }
+    let out = crate::check::check_program_ide(&files, &names, 1, &stdlib, &input.package, rec(file));
+    diags.extend(out.errors);
+    diags.extend(out.warnings);
+    let ast = files.swap_remove(file as usize);
+    IdeAnalysis { sources, file, ast, diags, rec: out.rec }
+}
+
 pub fn compile_file(path: &Path) -> Result<Compilation, Failure> {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,

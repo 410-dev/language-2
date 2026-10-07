@@ -17,8 +17,10 @@ USAGE:
     {name} disasm <file>
     {name} doctor
     {name} sdk install | list | path
+    {name} lsp
 
 Backends: 'interpreter' (tree-walking, default), 'bytecode' (bytecode VM), 'compiler' (LLVM native).
+'lsp' runs the language server (Language Server Protocol over stdin/stdout) for editors.
 The program's '@runtime' directive lists which backends it supports.
 This toolchain is SDK {sdk}; programs that use another '@using sdk N' run with the installed
 SDK N (see '{name} sdk list').",
@@ -123,6 +125,7 @@ fn main() -> ExitCode {
     match cmd.as_str() {
         "doctor" => return doctor(o.quiet),
         "sdk" => return sdk_command(o.positional.first().map(|s| s.as_str())),
+        "lsp" => return exit(with_big_stack(l2::lsp::serve)),
         "help" | "--help" | "-h" => {
             usage();
             return ExitCode::SUCCESS;

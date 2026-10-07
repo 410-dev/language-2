@@ -3,6 +3,7 @@
 
 mod arrays;
 mod expr;
+pub mod ide;
 mod members;
 mod oper;
 mod stmt;
@@ -259,6 +260,11 @@ pub struct Checker<'a> {
     /// Classes whose superclass was still being built when they were instantiated:
     /// (class, superclass). They are built once the superclass is complete.
     pub deferred: Vec<(ClassId, ClassId)>,
+    /// Recording for editor tooling (spec 15.4); `None` when compiling.
+    pub ide: Option<Box<ide::IdeRec>>,
+    /// Package of the entry file: empty for programs; editor tooling also checks modules of a
+    /// package on their own.
+    pub entry_package: String,
 }
 
 pub struct CheckOutput {
@@ -297,6 +303,8 @@ pub fn check_program(files: &[ast::FileAst], module_names: &[String], entry: usi
         lambda_counter: 0,
         prelude_module: 0,
         deferred: Vec::new(),
+        ide: None,
+        entry_package: String::new(),
     };
     c.run(module_names, entry, stdlib);
     let errors: Vec<Diag> = c.diags.drain(..).collect();
@@ -315,6 +323,72 @@ pub fn check_program(files: &[ast::FileAst], module_names: &[String], entry: usi
         }
         Err(e) => Err(e),
     }
+}
+
+/// Result of [`check_program_ide`].
+pub struct IdeOutput {
+    pub errors: Vec<Diag>,
+    pub warnings: Vec<Diag>,
+    pub rec: ide::IdeRec,
+}
+
+/// Type-checks a program for editor tooling (spec 15.4): like [`check_program`], but the entry
+/// file may be a module of package `entry_package` without `main`, all errors are returned
+/// together, and `rec` records what the names of the entry file refer to.
+pub fn check_program_ide(files: &[ast::FileAst], module_names: &[String], entry: usize, stdlib: &[bool], entry_package: &str, rec: ide::IdeRec) -> IdeOutput {
+    let mut c = Checker {
+        files,
+        diags: Vec::new(),
+        warnings: Vec::new(),
+        modules: Vec::new(),
+        class_decls: HashMap::new(),
+        iface_decls: HashMap::new(),
+        classes: Vec::new(),
+        cmeta: Vec::new(),
+        ifaces: Vec::new(),
+        imeta: Vec::new(),
+        class_inst: HashMap::new(),
+        iface_inst: HashMap::new(),
+        funcs: Vec::new(),
+        sigs: Vec::new(),
+        func_inst: HashMap::new(),
+        method_inst: HashMap::new(),
+        selectors: Vec::new(),
+        selector_map: HashMap::new(),
+        globals: Vec::new(),
+        global_inits: Vec::new(),
+        queue: VecDeque::new(),
+        fstack: Vec::new(),
+        config: Config::default(),
+        entry_module: entry,
+        lambda_counter: 0,
+        prelude_module: 0,
+        deferred: Vec::new(),
+        ide: Some(Box::new(rec)),
+        entry_package: entry_package.to_string(),
+    };
+    c.run(module_names, entry, stdlib);
+    let speculative = c.ide_check_generics();
+    c.ide_record_decls();
+    let has_main = c.modules[entry].funcs.contains_key("main") && entry_package.is_empty();
+    let mut errors: Vec<Diag> = std::mem::take(&mut c.diags);
+    if errors.is_empty() && has_main {
+        // static initialisers, main and the flow / ownership checks
+        match c.finish() {
+            Ok(mut p) => errors.extend(crate::flow::check_program(&mut p)),
+            Err(e) => errors.extend(e),
+        }
+    } else {
+        // static initialisers are checked even when the program cannot be completed
+        let _ = c.build_init();
+        c.process_queue();
+        errors.extend(std::mem::take(&mut c.diags));
+    }
+    let rec = *c.ide.take().unwrap();
+    // generic code checked only with sample type arguments has no flow diagnostics either
+    let file = rec.file;
+    errors.retain(|d| d.span.file != file || !speculative.iter().any(|(a, b)| (*a..=*b).contains(&d.span.line)));
+    IdeOutput { errors, warnings: c.warnings, rec }
 }
 
 impl<'a> Checker<'a> {
@@ -365,7 +439,11 @@ impl<'a> Checker<'a> {
         for (i, f) in self.files.iter().enumerate() {
             let wrap = self.file_policy(f);
             let name = module_names.get(i).cloned().unwrap_or_default();
-            let package = if i == 0 || i == entry { String::new() } else { name.rsplit_once('.').map(|(p, _)| p.to_string()).unwrap_or_default() };
+            let package = match i {
+                0 => String::new(),
+                i if i == entry => self.entry_package.clone(),
+                _ => name.rsplit_once('.').map(|(p, _)| p.to_string()).unwrap_or_default(),
+            };
             self.modules.push(ModuleInfo {
                 file: f.file,
                 name,
@@ -926,6 +1004,16 @@ impl<'a> Checker<'a> {
 
     // ------------------------------------------------------------------ type resolution
     pub fn resolve_type(&mut self, t: &TypeExpr, module: usize, subst: &Subst) -> Type {
+        let r = self.resolve_type_inner(t, module, subst);
+        if self.ide.is_some() {
+            if let TypeExpr::Named { name, span, .. } = t {
+                self.ide_type_named(name, *span, &r, subst);
+            }
+        }
+        r
+    }
+
+    fn resolve_type_inner(&mut self, t: &TypeExpr, module: usize, subst: &Subst) -> Type {
         match t {
             TypeExpr::Void => Type::Void,
             TypeExpr::Wildcard(span) => {

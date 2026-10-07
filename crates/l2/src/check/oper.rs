@@ -342,6 +342,15 @@ impl<'a> Checker<'a> {
             Ok(Some(f)) if self.class_decls.contains_key(&f) => f,
             _ => return None,
         };
+        if self.ide.is_some() {
+            let pos = match &path_expr.kind {
+                A::Member(..) => self.ide_member_pos(path_expr.span),
+                _ => Some(path_expr.span),
+            };
+            if let Some(p) = pos {
+                self.ide_type_use(&fqn, p);
+            }
+        }
         let targs = match targs {
             Some(ts) => {
                 let subst = self.cur_ref().subst.clone();
@@ -420,6 +429,36 @@ impl<'a> Checker<'a> {
 
     /// `new T(args)` (spec 10.4).
     pub fn new_expr(&mut self, callee: &'a ast::Expr, args: &'a [ast::Arg], expected: Option<&Type>, span: Span) -> HExpr {
+        if self.ide.is_none() {
+            return self.new_expr_inner(callee, args, expected, span);
+        }
+        let path_expr = match &callee.kind {
+            A::Index(b, _) => &**b,
+            _ => callee,
+        };
+        let pos = match &path_expr.kind {
+            A::Member(..) => self.ide_member_pos(path_expr.span),
+            _ => Some(path_expr.span),
+        };
+        let Some(path) = crate::parser::dotted_name(path_expr) else {
+            return self.new_expr_inner(callee, args, expected, span);
+        };
+        if let Some(p) = pos {
+            self.ide_target_type(p, Some(&path));
+        }
+        // the constructor is recorded as the callee; the class when no constructor was chosen
+        let simple = path.rsplit('.').next().unwrap_or(&path).to_string();
+        self.ide_call_push(pos, &simple);
+        let r = self.new_expr_inner(callee, args, expected, span);
+        self.ide_call_pop();
+        if let (Some(p), Type::Class(c)) = (pos, &r.ty) {
+            let fqn = self.cmeta[*c as usize].template.clone();
+            self.ide_type_use(&fqn, p);
+        }
+        r
+    }
+
+    fn new_expr_inner(&mut self, callee: &'a ast::Expr, args: &'a [ast::Arg], expected: Option<&Type>, span: Span) -> HExpr {
         let (path_expr, targs) = match &callee.kind {
             A::Index(b, t) => (&**b, Some(t)),
             _ => (callee, None),

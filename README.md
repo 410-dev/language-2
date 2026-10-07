@@ -51,7 +51,10 @@ language-2 emit-llvm <file> [--target amd64] [-o out.ll]
 language-2 disasm <file>                # 바이트코드 덤프
 language-2 doctor                       # 네이티브 툴체인/런타임 점검
 language-2 sdk install | list | path    # SDK 설치 (여러 버전을 나란히, 사양 14.13)
+language-2 lsp                          # 언어 서버 (에디터용, 사양 15.4)
 ```
+
+VS Code 확장(문법 강조, 진단, 호버, 정의로 이동, 자동완성, 시그니처 도움말)의 설치는 [`editors/README.md`](editors/README.md)를 참고하세요.
 
 프로그램의 `@using sdk N`이 이 툴체인의 SDK 버전과 다르면, 설치된 SDK N의 툴체인이 명령을 대신 실행합니다 (사양 2.3).
 네이티브 실행 파일은 기본적으로(`IncludeDependencies=false`) 설치된 SDK의 공유 런타임(`l2_native_rt.dll` / `.so` / `.dylib`)을 불러오는 작은 파일이고, `@compiler(IncludeDependencies=true)`이면 런타임을 정적 링크한 단일 실행 파일입니다 (사양 2.5).
@@ -176,6 +179,8 @@ crates/
     interp.rs    트리 워킹 인터프리터
     bytecode.rs  바이트코드 컴파일러,  vm.rs  가상 머신
     llvm.rs      LLVM IR 생성,  native.rs  opt/llc/링커 구동,  sdk.rs  SDK 설치·버전 선택
+    ide/         에디터 도구: 분석(진단·호버·정의·완성·시그니처·기호), 내장 멤버 표
+    lsp.rs       언어 서버 (Language Server Protocol, 표준 입출력)
     check/arrays.rs  배열 메서드(map/filter/reduce/...)를 루프로 낮춤
     prelude.l2   예외 계층·Droppable·Comparable·Numeric·Bytes (언어 자체로 작성)
   l2/stdlib/     표준 라이브러리 (언어 자체로 작성, 컴파일러에 내장):
@@ -183,6 +188,9 @@ crates/
 tests/
   programs/      차분 테스트 프로그램 (*.l2, 기대 출력 *.out, 선택: *.err, *.in)
   errors/        컴파일 에러 테스트 (첫 줄 `// error: <메시지>`)
+editors/
+  vscode/        VS Code 확장 (문법 + 언어 서버 클라이언트)
+  sublime/       Sublime Text 문법
 ```
 
 파이프라인 (사양 15.1):
@@ -272,7 +280,7 @@ cargo test
 
 - **LLVM 바인딩**: 사양은 Rust 바인딩 사용을 명시하지만, 이 환경에는 LLVM 개발 라이브러리가 없어 IR을 텍스트로 생성합니다. 코드 생성기는 IR 문자열만 만들기 때문에 `inkwell` 등으로 교체하기 쉽게 분리되어 있습니다. lld와 런타임을 컴파일러와 함께 배포하는 패키징(사양 2.5 구현 노트)은 아직 하지 않았습니다.
 - **크로스 링크**: 오브젝트 파일은 모든 타깃용으로 생성됩니다. 실행 파일 링크에는 해당 타깃용 `l2-native-rt` 정적 라이브러리와 링커(Windows: 해당 아키텍처의 MSVC 라이브러리)가 필요합니다.
-- **제네릭 본문 검사**: 단형화 방식이라 제네릭 본문은 인스턴스화될 때(구체 타입으로) 검사됩니다. 사용되지 않은 제네릭은 검사되지 않습니다. 클래스의 제네릭 메서드(`function T f[T](...)`)는 지원하지만 가상 호출 대상이 아니며(오버라이드 불가), 인터페이스의 제네릭 메서드는 아직 지원하지 않습니다.
+- **제네릭 본문 검사**: 단형화 방식이라 제네릭 본문은 인스턴스화될 때(구체 타입으로) 검사됩니다. 사용되지 않은 제네릭은 검사되지 않습니다 (언어 서버는 예시 타입으로 분석해 호버·자동완성만 제공합니다). 클래스의 제네릭 메서드(`function T f[T](...)`)는 지원하지만 가상 호출 대상이 아니며(오버라이드 불가), 인터페이스의 제네릭 메서드는 아직 지원하지 않습니다.
 - **빌림 검사**: 이동 후 사용·미할당 사용은 흐름 분석으로 정확히 검사하지만, 빌림 충돌은 (1) 같은 호출 안의 `*x`와 다른 사용, (2) 같은 호출에서 빌려 전달한 값을 다른 인자로 이동, (3) 참조 변수가 살아 있는 동안 원본의 이동/대입/변경, (4) for-each로 순회 중인 컬렉션의 변경을 검사하는 단순화된 형태입니다.
 - **IntegerOverflow 범위 순환**: `T.range(a, b, step)`의 마지막 증가가 타입 범위를 넘으면 정책(`error`)에 따라 예외가 날 수 있습니다.
 - **외부 라이브러리 배포**(사양 16.1, 9.8), `Shared[T]`, 멀티스레딩(`Promise`), FFI는 추후 작업입니다.

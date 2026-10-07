@@ -1,2 +1,5 @@
-.gitignore
 *.vsix
+.gitignore
+**/*.map
+node_modules/**/*.md
+node_modules/**/*.d.ts

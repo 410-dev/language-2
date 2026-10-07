@@ -1,12 +1,21 @@
 {
   "name": "language-2-syntax",
-  "displayName": "language-2 Syntax",
-  "description": "Syntax highlighting for language-2 (.l2) source files",
+  "displayName": "language-2",
+  "description": "language-2 (.l2): syntax highlighting, diagnostics, hover, go to definition, completion and signature help",
   "version": "0.1.0",
   "publisher": "language-2",
   "license": "MIT",
-  "engines": { "vscode": "^1.60.0" },
-  "categories": ["Programming Languages"],
+  "engines": { "vscode": "^1.82.0" },
+  "categories": ["Programming Languages", "Linters"],
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:language-2"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "신뢰하지 않은 폴더에서는 워크스페이스 설정의 language-2.server.path를 쓰지 않는다 (사용자 설정의 값이나 설치된 SDK의 서버를 쓴다).",
+      "restrictedConfigurations": ["language-2.server.path"]
+    }
+  },
   "contributes": {
     "languages": [
       {
@@ -22,6 +31,42 @@
         "scopeName": "source.l2",
         "path": "./syntaxes/language-2.tmLanguage.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "language-2.restartServer",
+        "title": "Restart Language Server",
+        "category": "language-2"
+      },
+      {
+        "command": "language-2.showServerOutput",
+        "title": "Show Language Server Output",
+        "category": "language-2"
+      }
+    ],
+    "configuration": {
+      "title": "language-2",
+      "properties": {
+        "language-2.server.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "언어 서버로 실행할 `language-2` 실행 파일 경로. 실행 파일이 든 폴더, SDK 버전 폴더(`.../sdk/1`), SDK 홈 폴더를 적어도 되고 `%LOCALAPPDATA%`, `${env:NAME}`, `$NAME`, `~`는 펼친다. 비워 두면(권장) `PATH`의 `language-2`, 그다음 SDK 홈(`%LOCALAPPDATA%\\language-2`, `~/.language-2` 또는 `$L2_HOME`)에 설치된 가장 높은 SDK 버전을 쓴다."
+        },
+        "language-2.server.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "언어 서버(진단, 호버, 정의로 이동, 자동완성, 시그니처 도움말)를 사용한다. 끄면 문법 강조만 남는다."
+        },
+        "language-2.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "언어 서버와 주고받는 메시지를 출력 창에 기록한다."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }
