@@ -81,6 +81,18 @@ impl<'p> Host for Interp<'p> {
         let p = self.p;
         default_object_string(p, o, self)
     }
+    fn obj_to_json(&mut self, o: &Rc<Object>) -> Result<Option<Value>, Exc> {
+        match self.p.classes[o.class as usize].to_json_fn {
+            Some(f) => Ok(Some(self.call(f, vec![Value::Object(o.clone())])?)),
+            None => Ok(None),
+        }
+    }
+    fn obj_from_json(&mut self, cls: u32, v: &Value) -> Result<Option<Value>, Exc> {
+        match self.p.classes[cls as usize].from_json_fn {
+            Some(f) => Ok(Some(self.call(f, vec![v.clone()])?)),
+            None => Ok(None),
+        }
+    }
     fn obj_default_string(&mut self, o: &Rc<Object>) -> Result<String, Exc> {
         let p = self.p;
         default_object_string(p, o, self)

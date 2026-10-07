@@ -125,12 +125,15 @@ function void main() {
 | --- | --- |
 | 프렐류드 | `Bytes`, `String.encode()`/`Bytes.decode()`, hex/base64, 숫자 `toBytes`/`fromBytes`, `toJson()` |
 | `system` | `System.shell(문자열 \| 배열)`, `sleep`, 환경 변수, `Platform`, `PlatformTask`(운영체제별 명령), `Threads.main`, `Promise`(자리만) |
-| `time` | `Duration`, `Instant`, `DateTime`(형식/파싱, 달력 연산, 오프셋) |
+| `time` | `Duration`, `Instant`, `DateTime`(형식/파싱, 달력 연산, IANA 시간대와 서머타임), `TimeZone` |
 | `io` | `File`(전체 읽기/쓰기, 스트림), `Directory`, `Path` |
 | `net` | `TcpSocket`, `TcpServer`, `UdpSocket`, `Http`(http/https 클라이언트) |
-| `math` | `math.Random`(시드 가능한 난수 객체), `math.linear` |
+| `math` | `math.Math`와 숫자 메서드(`squareRoot`, `sine`, `logarithm`, `greatestCommonDivisor` ...), `math.Random`(시드 가능한 난수 객체), `math.linear` |
+| `text` | `text.Regex`(선형 시간 엔진, `Regex.fancy`는 역참조·전후방 탐색), String의 `matches`/`replaceRegex`/..., 정규식 기반 `String.random`/`randomize` |
 | `crypto` | `HashDigest`(SHA-2/SHA-3/HMAC), `SymmetricCryptography`(AES-GCM, ChaCha20-Poly1305), `AsymmetricCryptography`(RSA), `KeyDerivation` |
-| `data` | `data.Json`, `data.collections.{Set, Queue, Deque, PriorityQueue}` |
+| `data` | `data.Json`(`decode[T]`로 객체까지), `data.collections.{Set, Queue, Deque, PriorityQueue}` |
+
+필드에 `json["이름", encode, decode]` 수정자를 붙이면 객체를 JSON으로 쓰고 읽을 수 있습니다 (사양 10.8). 정규식과 경로에는 raw 문자열 `r"\d+"`, `r#"..."#`를 씁니다 (사양 3.3).
 
 ```
 using stdio as stdio

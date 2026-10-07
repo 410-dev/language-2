@@ -1,9 +1,10 @@
-//! Clocks, calendar arithmetic and date formatting (proleptic Gregorian calendar, fixed UTC
-//! offsets; the local offset comes from the operating system's time zone rules).
+//! Clocks, calendar arithmetic, date formatting and IANA time zones (proleptic Gregorian
+//! calendar). Zone rules come from `jiff`: the system's zoneinfo database on Unix, a bundled
+//! copy on Windows.
 
-use super::{int_array, Args, SysOp};
+use super::{int_array, opt_str, str_array, tuple, Args, SysOp};
 use crate::value::*;
-use chrono::{Local, NaiveDate, Offset, TimeZone};
+use jiff::tz::TimeZone;
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS: [&str; 7] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -79,24 +80,44 @@ pub fn from_fields(f: &[i64], offset: i64) -> i64 {
     days * 86_400_000 + g(3) * 3_600_000 + g(4) * 60_000 + g(5) * 1000 + g(6) - offset * 1000
 }
 
-pub fn local_offset(millis: i64) -> i64 {
-    match Local.timestamp_millis_opt(millis) {
-        chrono::LocalResult::Single(t) | chrono::LocalResult::Ambiguous(t, _) => t.offset().fix().local_minus_utc() as i64,
-        chrono::LocalResult::None => 0,
+/// The zone named `name` ("Asia/Seoul", "UTC", ...); `None` = the system's local zone.
+pub fn zone(name: Option<&str>) -> Result<TimeZone, String> {
+    match name {
+        None => Ok(TimeZone::system()),
+        Some(n) => TimeZone::get(n).map_err(|_| format!("unknown time zone \"{}\" (use an IANA name such as \"Asia/Seoul\" or \"UTC\")", n)),
     }
 }
 
-/// The local offset in effect at a local wall-clock time (the earlier one when ambiguous).
-fn local_offset_of(f: &[i64]) -> i64 {
+fn timestamp(millis: i64) -> jiff::Timestamp {
+    jiff::Timestamp::from_millisecond(millis).unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+}
+
+/// UTC offset (seconds) of `tz` at an instant.
+pub fn zone_offset(tz: &TimeZone, millis: i64) -> i64 {
+    tz.to_offset(timestamp(millis)).seconds() as i64
+}
+
+/// The instant (millis) and offset of a wall-clock time in `tz`. A time that occurs twice
+/// (clocks set back) takes the earlier offset; a skipped time (clocks set forward) moves
+/// forward by the length of the gap, like Java's ZonedDateTime.
+fn zone_resolve(tz: &TimeZone, f: &[i64]) -> (i64, i64) {
     let g = |i: usize| f.get(i).copied().unwrap_or(0);
-    let Some(nd) = NaiveDate::from_ymd_opt(g(0) as i32, g(1) as u32, g(2) as u32).and_then(|d| d.and_hms_milli_opt(g(3) as u32, g(4) as u32, g(5) as u32, g(6) as u32)) else {
-        return local_offset(from_fields(f, 0));
-    };
-    match Local.from_local_datetime(&nd) {
-        chrono::LocalResult::Single(t) | chrono::LocalResult::Ambiguous(t, _) => t.offset().fix().local_minus_utc() as i64,
-        // in a gap (clocks moved forward): use the offset before the transition
-        chrono::LocalResult::None => local_offset(from_fields(f, 0) - 3_600_000 * 3),
+    let dt = jiff::civil::DateTime::new(g(0) as i16, g(1) as i8, g(2) as i8, g(3) as i8, g(4) as i8, g(5) as i8, (g(6) * 1_000_000) as i32);
+    match dt.ok().and_then(|dt| tz.to_ambiguous_zoned(dt).compatible().ok()) {
+        Some(z) => (z.timestamp().as_millisecond(), z.offset().seconds() as i64),
+        None => {
+            let off = zone_offset(tz, from_fields(f, 0));
+            (from_fields(f, off), off)
+        }
     }
+}
+
+fn local_resolve(f: &[i64]) -> (i64, i64) {
+    zone_resolve(&TimeZone::system(), f)
+}
+
+fn abbreviation(tz: &TimeZone, millis: i64) -> String {
+    tz.to_offset_info(timestamp(millis)).abbreviation().to_string()
 }
 
 fn offset_text(off: i64, colon: bool, z: bool) -> String {
@@ -155,7 +176,7 @@ fn tokens(pattern: &str) -> Vec<(String, bool)> {
     out
 }
 
-pub fn format(millis: i64, offset: i64, pattern: &str) -> Result<String, String> {
+pub fn format(millis: i64, offset: i64, pattern: &str, zone_name: Option<&str>) -> Result<String, String> {
     let f = fields(millis, offset);
     let (y, mo, d, hh, mi, ss, ms, dow) = (f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]);
     let h12 = if hh % 12 == 0 { 12 } else { hh % 12 };
@@ -192,6 +213,14 @@ pub fn format(millis: i64, offset: i64, pattern: &str) -> Result<String, String>
             "XXX" => offset_text(offset, true, true),
             "xxx" => offset_text(offset, true, false),
             "Z" => offset_text(offset, false, false),
+            "VV" => match zone_name {
+                Some(z) => z.to_string(),
+                None => offset_text(offset, true, true),
+            },
+            "z" | "zzz" => match zone_name {
+                Some(z) => abbreviation(&zone(Some(z))?, millis),
+                None => format!("UTC{}", if offset == 0 { String::new() } else { offset_text(offset, true, false) }),
+            },
             other => return Err(format!("unknown date pattern letter(s) '{}' (quote literal text with '...')", other)),
         };
         out.push_str(&s);
@@ -199,14 +228,15 @@ pub fn format(millis: i64, offset: i64, pattern: &str) -> Result<String, String>
     Ok(out)
 }
 
-/// Parses `text` with `pattern`: [epochMillis, offsetSeconds]. Without an offset in the
-/// pattern the text is local time.
-pub fn parse(text: &str, pattern: &str) -> Result<[i64; 2], String> {
+/// Parses `text` with `pattern`: ([epochMillis, offsetSeconds], zone). Without an offset or zone
+/// in the text, it is a wall-clock time in `default_zone` (`None` = local).
+pub fn parse(text: &str, pattern: &str, default_zone: Option<&str>) -> Result<([i64; 2], Option<String>), String> {
     let t: Vec<char> = text.chars().collect();
     let mut i = 0;
     let mut f = [1970i64, 1, 1, 0, 0, 0, 0];
     let mut pm: Option<bool> = None;
     let mut offset: Option<i64> = None;
+    let mut zone_name: Option<String> = None;
     let bad = |what: &str| format!("cannot parse \"{}\" with pattern \"{}\": {}", text, pattern, what);
     let num = |i: &mut usize, min: usize, max: usize| -> Option<i64> {
         let start = *i;
@@ -262,12 +292,15 @@ pub fn parse(text: &str, pattern: &str) -> Result<[i64; 2], String> {
             "S" => num(&mut i, 1, 1).map(|v| f[6] = v * 100),
             "a" => {
                 let rest: String = t[i..].iter().take(2).collect::<String>().to_uppercase();
-                match rest.as_str() {
-                    "AM" => Some(pm = Some(false)),
-                    "PM" => Some(pm = Some(true)),
+                let half = match rest.as_str() {
+                    "AM" => Some(false),
+                    "PM" => Some(true),
                     _ => None,
-                }
-                .map(|_| i += 2)
+                };
+                half.map(|p| {
+                    pm = Some(p);
+                    i += 2;
+                })
             }
             "EEEE" => word(&mut i, &DAYS, false).map(|_| ()),
             "EEE" => word(&mut i, &DAYS, true).map(|_| ()),
@@ -295,6 +328,20 @@ pub fn parse(text: &str, pattern: &str) -> Result<[i64; 2], String> {
                     None
                 }
             }
+            "VV" => {
+                let start = i;
+                while i < t.len() && (t[i].is_ascii_alphanumeric() || "_/+-".contains(t[i])) {
+                    i += 1;
+                }
+                let name: String = t[start..i].iter().collect();
+                if name.is_empty() {
+                    None
+                } else {
+                    zone(Some(&name))?;
+                    zone_name = Some(name);
+                    Some(())
+                }
+            }
             other => return Err(format!("unknown date pattern letter(s) '{}'", other)),
         };
         if v.is_none() {
@@ -311,8 +358,13 @@ pub fn parse(text: &str, pattern: &str) -> Result<[i64; 2], String> {
         f[3] = f[3] % 12 + if p { 12 } else { 0 };
     }
     check_fields(&f).map_err(|e| bad(&e))?;
-    let off = offset.unwrap_or_else(|| local_offset_of(&f));
-    Ok([from_fields(&f, off), off])
+    let zone_name = zone_name.or_else(|| if offset.is_none() { default_zone.map(|z| z.to_string()) } else { None });
+    let (millis, off) = match (offset, &zone_name) {
+        (Some(o), _) => (from_fields(&f, o), o),
+        (None, Some(z)) => zone_resolve(&zone(Some(z))?, &f),
+        (None, None) => local_resolve(&f),
+    };
+    Ok(([millis, off], zone_name))
 }
 
 /// Go-style duration text: `1h2m3.5s`, `1.5ms`, `250µs`, `42ns`.
@@ -374,28 +426,54 @@ pub(super) fn call<H: Host>(op: SysOp, a: &Args, h: &mut H) -> Result<Value, H::
             Err(e) => -(e.duration().as_millis() as i64),
         }),
         timeMonotonicNanos => Value::i64(monotonic_base().elapsed().as_nanos() as i64),
-        timeLocalOffset => Value::i64(local_offset(a.int(0))),
-        timeLocalOffsetOf => {
-            let f = a.ints(0);
-            check_fields(&f).map_err(|e| ill(h, e))?;
-            Value::i64(local_offset_of(&f))
-        }
         timeFields => int_array(fields(a.int(0), a.int(1)).to_vec()),
         timeFromFields => {
             let f = a.ints(0);
             check_fields(&f).map_err(|e| ill(h, e))?;
             Value::i64(from_fields(&f, a.int(1)))
         }
-        timeAddMonths => {
-            let (millis, off, months) = (a.int(0), a.int(1), a.int(2));
+        timeAddCalendar => {
+            // millis, offset, months, days, zone: the same wall-clock time on another date
+            let (millis, off, months, days) = (a.int(0), a.int(1), a.int(2), a.int(3));
             let f = fields(millis, off);
             let total = f[0] * 12 + (f[1] - 1) + months;
             let (y, m) = (total.div_euclid(12), total.rem_euclid(12) + 1);
             let d = f[2].min(days_in_month(y, m));
-            Value::i64(from_fields(&[y, m, d, f[3], f[4], f[5], f[6]], off))
+            let (y, m, d) = civil_from_days(days_from_civil(y, m, d) + days);
+            let nf = [y, m, d, f[3], f[4], f[5], f[6]];
+            let (nm, noff) = match a.opt_str(4) {
+                Some(z) => zone_resolve(&zone(Some(&z)).map_err(|e| ill(h, e))?, &nf),
+                None => (from_fields(&nf, off), off),
+            };
+            tuple(vec![Value::i64(nm), Value::i64(noff)])
         }
-        timeFormat => Value::str(format(a.int(0), a.int(1), &a.str(2)).map_err(|e| ill(h, e))?),
-        timeParse => int_array(parse(&a.str(0), &a.str(1)).map_err(|e| ill(h, e))?.to_vec()),
+        timeFormat => Value::str(format(a.int(0), a.int(1), &a.str(2), a.opt_str(3).as_deref()).map_err(|e| ill(h, e))?),
+        timeParse => {
+            let (r, z) = parse(&a.str(0), &a.str(1), a.opt_str(2).as_deref()).map_err(|e| ill(h, e))?;
+            tuple(vec![int_array(r.to_vec()), opt_str(z)])
+        }
+        tzLocalName => opt_str(TimeZone::system().iana_name().map(|s| s.to_string())),
+        tzAvailable => {
+            let mut names: Vec<String> = jiff::tz::db().available().map(|n| n.to_string()).collect();
+            names.sort();
+            str_array(names)
+        }
+        tzValid => Value::Bool(zone(Some(&a.str(0))).is_ok()),
+        tzOffset => {
+            let tz = zone(a.opt_str(0).as_deref()).map_err(|e| ill(h, e))?;
+            Value::i64(zone_offset(&tz, a.int(1)))
+        }
+        tzOffsetOf => {
+            let f = a.ints(1);
+            check_fields(&f).map_err(|e| ill(h, e))?;
+            let tz = zone(a.opt_str(0).as_deref()).map_err(|e| ill(h, e))?;
+            let (m, o) = zone_resolve(&tz, &f);
+            tuple(vec![Value::i64(m), Value::i64(o)])
+        }
+        tzAbbreviation => {
+            let tz = zone(a.opt_str(0).as_deref()).map_err(|e| ill(h, e))?;
+            Value::str(abbreviation(&tz, a.int(1)))
+        }
         durationString => Value::str(duration_string(a.int(0))),
         _ => unreachable!(),
     })
@@ -416,8 +494,15 @@ mod tests {
         let f = fields(1_700_000_000_123, 9 * 3600);
         assert_eq!(&f[..7], &[2023, 11, 15, 7, 13, 20, 123]);
         assert_eq!(f[7], 3); // Wednesday
-        assert_eq!(format(1_700_000_000_123, 9 * 3600, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX EEE MMM a").unwrap(), "2023-11-15T07:13:20.123+09:00 Wed Nov AM");
-        assert_eq!(parse("2023-11-15T07:13:20.123+09:00", "yyyy-MM-dd'T'HH:mm:ss.SSSXXX").unwrap(), [1_700_000_000_123, 32400]);
+        assert_eq!(format(1_700_000_000_123, 9 * 3600, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX EEE MMM a", None).unwrap(), "2023-11-15T07:13:20.123+09:00 Wed Nov AM");
+        assert_eq!(parse("2023-11-15T07:13:20.123+09:00", "yyyy-MM-dd'T'HH:mm:ss.SSSXXX", None).unwrap().0, [1_700_000_000_123, 32400]);
+        // New York: EST -5 in winter, EDT -4 in summer; 2026-03-08 02:30 does not exist
+        let ny = zone(Some("America/New_York")).unwrap();
+        assert_eq!(zone_offset(&ny, 1_767_225_600_000), -5 * 3600);
+        assert_eq!(zone_offset(&ny, 1_783_000_000_000), -4 * 3600);
+        // 02:30 is skipped: it becomes 03:30 EDT (07:30Z)
+        assert_eq!(zone_resolve(&ny, &[2026, 3, 8, 2, 30, 0, 0]), (from_fields(&[2026, 3, 8, 7, 30, 0, 0], 0), -4 * 3600));
+        assert_eq!(format(1_783_000_000_000, -4 * 3600, "VV zzz", Some("America/New_York")).unwrap(), "America/New_York EDT");
         assert_eq!(duration_string(3_723_500_000_000), "1h2m3.5s");
         assert_eq!(duration_string(1_500_000), "1.5ms");
         assert_eq!(duration_string(-42), "-42ns");

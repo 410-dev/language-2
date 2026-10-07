@@ -1,0 +1,5 @@
+// error: invalid regular expression
+using text.Regex as Regex
+function void main() {
+    Regex r = new Regex("(unclosed")
+}

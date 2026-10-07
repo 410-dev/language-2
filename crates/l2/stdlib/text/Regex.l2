@@ -1,0 +1,222 @@
+@using sdk 1
+
+// text.Regex / text.Match: regular expressions (spec 14.15).
+//
+//     Regex date = new Regex(r"(?<year>\d{4})-(?<month>\d{2})-(\d{2})")
+//     Match? m = date.find("due 2026-10-07")
+//     stdio.println(m!.group("year"))                      // 2026
+//     date.replace("2026-10-07", "$month/$3/$year")         // "10/07/2026"
+//     Regex.fancy(r"(\w+) \1")                             // back-references, look-around
+//
+// new Regex(...) uses a linear-time engine: matching time grows with the text length only, so
+// untrusted patterns or texts cannot stall the program; it has no back-references or
+// look-around. Regex.fancy(...) adds them with a backtracking engine (use it for trusted
+// patterns). Flags: "i" ignore case, "m" ^ and $ at line breaks, "s" . matches line breaks,
+// "x" ignore whitespace and # comments in the pattern. Positions are character indices.
+// Invalid patterns throw IllegalArgumentException (literal patterns are checked when the
+// program is compiled).
+
+using intrinsics as intr
+
+public class Match {
+    // [start, end] character positions of each group (-1, -1 when a group did not take part)
+    private Int64[] spans
+    private String source
+    private String[] names
+
+    public Match(&Int64[] spans, &String source, &String[] names) {
+        this.spans = spans.clone()
+        this.source = source.clone()
+        this.names = names.clone()
+    }
+
+    // the whole matched text
+    public function String text() {
+        return source.substring(spans[0], spans[1])
+    }
+
+    public function Int64 start() {
+        return spans[0]
+    }
+
+    public function Int64 end() {
+        return spans[1]
+    }
+
+    // number of groups, not counting the whole match
+    public function Int64 groupCount() {
+        return spans.length() / 2 - 1
+    }
+
+    // group `i` (0 = the whole match); null when the group did not take part
+    public function String? group(Int64 i) {
+        if (i < 0 or i > groupCount()) {
+            throw IndexOutOfBoundsException(f"group {i} of a pattern with {groupCount()} group(s)")
+        }
+        if (spans[2 * i] < 0) {
+            return null
+        }
+        return source.substring(spans[2 * i], spans[2 * i + 1])
+    }
+
+    // a named group (?<name>...)
+    public function String? group(&String name) {
+        Int64 i = names.indexOf(name)
+        if (i <= 0) {
+            throw IllegalArgumentException(f"the pattern has no group named \"{name}\"")
+        }
+        return group(i)
+    }
+
+    // groups 1.. (null for groups that did not take part)
+    public function String?[] groups() {
+        String?[] out = []
+        for (Int64 i = 1; i <= groupCount(); i += 1) {
+            out.add(group(i))
+        }
+        return out
+    }
+
+    public function Int64 groupStart(Int64 i) {
+        return spans[2 * i]
+    }
+
+    public function Int64 groupEnd(Int64 i) {
+        return spans[2 * i + 1]
+    }
+
+    public function String toString() {
+        return f"Match(\"{text()}\" at {spans[0]}..{spans[1]})"
+    }
+}
+
+public class Regex {
+    private DTVariable handle
+    private Immutable String source
+    private Immutable String flagText
+    private String[] names
+
+    public Regex(&String pattern) {
+        this.handle = intr.regexNew(pattern, "", false)
+        this.source = pattern.clone()
+        this.flagText = ""
+        this.names = intr.regexGroupNames(handle)
+    }
+
+    public Regex(&String pattern, &String flags) {
+        this.handle = intr.regexNew(pattern, flags, false)
+        this.source = pattern.clone()
+        this.flagText = flags.clone()
+        this.names = intr.regexGroupNames(handle)
+    }
+
+    private Regex(&String pattern, &String flags, Boolean fancy) {
+        this.handle = intr.regexNew(pattern, flags, fancy)
+        this.source = pattern.clone()
+        this.flagText = flags.clone()
+        this.names = intr.regexGroupNames(handle)
+    }
+
+    // backtracking engine with back-references (\1, \k<name>) and look-around ((?=...), (?<!...))
+    public static function Regex fancy(&String pattern) {
+        return new Regex(pattern, "", true)
+    }
+
+    public static function Regex fancy(&String pattern, &String flags) {
+        return new Regex(pattern, flags, true)
+    }
+
+    // `text` with every regex metacharacter escaped, to match it literally
+    public static function String escape(&String text) {
+        return intr.regexEscape(text)
+    }
+
+    public function String pattern() {
+        return source.clone()
+    }
+
+    public function String flags() {
+        return flagText.clone()
+    }
+
+    // number of groups, not counting the whole match
+    public function Int64 groupCount() {
+        return names.length() - 1
+    }
+
+    // whether the pattern matches somewhere in `text`
+    public function Boolean test(&String text) {
+        return !intr.regexFind(handle, text, 0).isEmpty()
+    }
+
+    // whether the pattern matches all of `text`
+    public function Boolean matchesAll(&String text) {
+        Int64[] s = intr.regexFind(handle, text, 0)
+        return !s.isEmpty() and s[0] == 0 and s[1] == text.length()
+    }
+
+    // the first match; null when there is none
+    public function Match? find(&String text) {
+        Int64[] s = intr.regexFind(handle, text, 0)
+        if (s.isEmpty()) {
+            return null
+        }
+        return new Match(s, text, names)
+    }
+
+    // the first match at character position `from` or later
+    public function Match? find(&String text, Int64 from) {
+        Int64[] s = intr.regexFind(handle, text, from)
+        if (s.isEmpty()) {
+            return null
+        }
+        return new Match(s, text, names)
+    }
+
+    // all non-overlapping matches, left to right
+    public function Match[] findAll(&String text) {
+        Int64[] all = intr.regexFindAll(handle, text)
+        Int64 width = 2 * names.length()
+        Match[] out = Match.array()
+        for (Int64 i = 0; i < all.length(); i += width) {
+            out.add(new Match(all.slice(i, i + width), text, names))
+        }
+        return out
+    }
+
+    // replaces every match; `replacement` may use $1, $name, ${name} and $$ for "$"
+    public function String replace(&String text, &String replacement) {
+        return intr.regexReplace(handle, text, replacement, 0)
+    }
+
+    public function String replaceFirst(&String text, &String replacement) {
+        return intr.regexReplace(handle, text, replacement, 1)
+    }
+
+    // replaces every match with what `f` returns for it
+    public function String replace(&String text, Function[(&Match), String] f) {
+        String out = ""
+        Int64 last = 0
+        for (m in findAll(text)) {
+            out.append(text.substring(last, m.start()))
+            out.append(f(&m))
+            last = m.end()
+        }
+        out.append(text.substring(last))
+        return out
+    }
+
+    // the text between matches
+    public function String[] split(&String text) {
+        return intr.regexSplit(handle, text, 0)
+    }
+
+    // at most `limit` parts (the last holds the rest)
+    public function String[] split(&String text, Int64 limit) {
+        return intr.regexSplit(handle, text, limit)
+    }
+
+    public function String toString() {
+        return flagText.isEmpty() ? f"Regex({source})" : f"Regex({source}, {flagText})"
+    }
+}

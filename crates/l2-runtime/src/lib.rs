@@ -5,8 +5,10 @@
 pub mod bigint;
 pub mod builtins;
 pub mod format;
+pub mod math;
 pub mod numeric;
 pub mod ops;
+pub mod regex_gen;
 pub mod sys;
 pub mod value;
 

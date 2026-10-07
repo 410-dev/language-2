@@ -228,6 +228,48 @@ impl Parser {
                     self.bump();
                     m.getter = true;
                 }
+                // json["key", encode, decode]
+                Tok::Ident(s) if s == "json" && matches!(self.peek_at(1), Tok::LBracket) => {
+                    let span = self.span();
+                    self.bump();
+                    self.bump();
+                    let mut spec = JsonSpec { name: None, encode: false, decode: false, span };
+                    loop {
+                        match self.peek().clone() {
+                            Tok::RBracket => {
+                                self.bump();
+                                break;
+                            }
+                            Tok::Str(name) => {
+                                self.bump();
+                                if spec.name.is_some() {
+                                    return Err(Diag::error(self.span(), "json[...] takes one name"));
+                                }
+                                spec.name = Some(name);
+                            }
+                            Tok::Ident(w) if w == "encode" || w == "decode" => {
+                                self.bump();
+                                if w == "encode" {
+                                    spec.encode = true;
+                                } else {
+                                    spec.decode = true;
+                                }
+                            }
+                            _ => return Err(Diag::error(self.span(), "json[...] takes an optional \"name\" and the words encode and/or decode")),
+                        }
+                        match self.peek() {
+                            Tok::Comma => {
+                                self.bump();
+                            }
+                            Tok::RBracket => {}
+                            _ => return Err(Diag::error(self.span(), "expected ',' or ']' in json[...]")),
+                        }
+                    }
+                    if m.json.is_some() {
+                        return Err(Diag::error(span, "duplicate json[...] modifier"));
+                    }
+                    m.json = Some(spec);
+                }
                 Tok::Ident(s) if s == "setter" && matches!(self.peek_at(1), Tok::Dot) => {
                     self.bump();
                     self.bump();

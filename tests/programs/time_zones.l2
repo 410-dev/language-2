@@ -1,0 +1,43 @@
+// IANA time zones (spec 14.7).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using time.*
+
+function void main() {
+    DateTime seoul = DateTime.ofZone(2026, 10, 7, 21, 5, 0, "Asia/Seoul")
+    stdio.println(seoul)
+    stdio.println(f"{seoul.zone()} {seoul.zoneAbbreviation()} {seoul.offsetSeconds()}")
+    DateTime ny = seoul.inZone("America/New_York")
+    stdio.println(f"{ny} {ny.zoneAbbreviation()} {ny == seoul}")
+    stdio.println(ny.format("yyyy-MM-dd HH:mm zzz (VV, XXX)"))
+
+    // daylight saving time in New York: 2026-03-08 02:00 -> 03:00, 2026-11-01 02:00 -> 01:00
+    DateTime before = DateTime.ofZone(2026, 3, 7, 12, 0, 0, "America/New_York")
+    stdio.println(f"{before} -> plusDays(1) {before.plusDays(1)} / +24h {before + Duration.ofHours(24)}")
+    DateTime gap = DateTime.ofZone(2026, 3, 8, 2, 30, 0, "America/New_York")
+    stdio.println(f"skipped 02:30 -> {gap}")
+    DateTime fold = DateTime.ofZone(2026, 11, 1, 1, 30, 0, "America/New_York")
+    stdio.println(f"repeated 01:30 -> {fold} then +1h {fold + Duration.ofHours(1)}")
+    stdio.println(f"{DateTime.ofZone(2026, 1, 31, "Europe/London").plusMonths(1)}")
+
+    // parsing with zones
+    DateTime p = DateTime.parse("2026-10-07T12:00:00+09:00[Asia/Seoul]")
+    stdio.println(f"{p} {p.zone()}")
+    DateTime q = DateTime.parse("2026-07-01 09:00", "yyyy-MM-dd HH:mm", "Europe/Paris")
+    stdio.println(f"{q} {q.toUtc()}")
+    DateTime r = DateTime.parse("2026-12-25 18:30 Australia/Sydney", "yyyy-MM-dd HH:mm VV")
+    stdio.println(f"{r} {r.zoneAbbreviation()}")
+    stdio.println(DateTime.ofEpochMillis(0, "Asia/Kolkata"))
+    stdio.println(f"{DateTime.ofOffset(2026, 1, 1, 0, 0, 0, 3600).zone() ?? "fixed offset"} {seoul.toUtc().zone() ?? "fixed offset"}")
+
+    stdio.println(f"{TimeZone.isValid("Asia/Seoul")} {TimeZone.isValid("Mars/Olympus")} {TimeZone.available().contains("Europe/Berlin")}")
+    stdio.println(f"{TimeZone.offsetSeconds("America/Los_Angeles", &seoul)} {TimeZone.abbreviation("Europe/Berlin", &seoul)}")
+    stdio.println(TimeZone.local() != null)
+    try {
+        DateTime.now("Mars/Olympus")
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+}

@@ -903,4 +903,13 @@ pub trait Host {
     fn is_subclass(&self, cls: u32, of: u32) -> bool;
     fn implements(&self, cls: u32, iface: u32) -> bool;
     fn class_name(&self, cls: u32) -> String;
+    /// The object's `json[encode]` fields as a Dictionary; `None` when its class has none.
+    fn obj_to_json(&mut self, _o: &Rc<Object>) -> Result<Option<Value>, Self::Err> {
+        Ok(None)
+    }
+    /// A new object of class `cls` from a JSON object (its `json[decode]` fields); `None`
+    /// when the class cannot be decoded.
+    fn obj_from_json(&mut self, _cls: u32, _v: &Value) -> Result<Option<Value>, Self::Err> {
+        Ok(None)
+    }
 }

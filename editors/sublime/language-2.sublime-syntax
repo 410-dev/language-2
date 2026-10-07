@@ -20,6 +20,7 @@ contexts:
   code:
     - include: comments
     - include: annotations
+    - include: raw_strings
     - include: fstrings
     - include: strings
     - include: numbers
@@ -131,6 +132,18 @@ contexts:
     - include: escapes
     - include: placeholders
 
+  # r"..." and r#"..."#: no escapes, may span lines
+  raw_strings:
+    - match: '(r)(#*)(")'
+      captures:
+        1: storage.type.string.l2
+        3: punctuation.definition.string.begin.l2
+      push:
+        - meta_scope: string.quoted.raw.l2
+        - match: '"\2'
+          scope: punctuation.definition.string.end.l2
+          pop: true
+
   fstrings:
     - match: '(f)(")'
       captures:
@@ -219,7 +232,7 @@ contexts:
       scope: storage.type.class.l2
     - match: '\b(?:public|private|protected|static|Immutable|copied|extends|implements|throws|move)\b'
       scope: storage.modifier.l2
-    - match: '\b(?:getter|setter(?:\.(?:chain|nochain))?)\b'
+    - match: '\b(?:getter|setter(?:\.(?:chain|nochain))?|json(?=\[))\b'
       scope: storage.modifier.accessor.l2
     - match: '\b(?:true|false)\b'
       scope: constant.language.boolean.l2

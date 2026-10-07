@@ -1,11 +1,17 @@
 @using sdk 1
 
-// time.DateTime: a calendar date and time at a fixed UTC offset, with millisecond precision
-// (spec 14.7). The proleptic Gregorian calendar is used for all years.
+// time.DateTime: a calendar date and time with millisecond precision (spec 14.7). The proleptic
+// Gregorian calendar is used for all years.
+//
+// A DateTime is either in an IANA time zone ("Asia/Seoul", "America/New_York"), whose rules
+// give the UTC offset at every instant (daylight saving time included), or at a fixed UTC
+// offset (ofOffset, withOffset, toUtc, parsed text with an offset). now() and of() use the
+// system's local zone.
 //
 // Formatting and parsing patterns: yyyy yy MMMM (January) MMM (Jan) MM M dd d HH H hh h mm m
-// ss s SSS a (AM/PM) EEEE (Monday) EEE (Mon) XXX (+09:00, Z for UTC) xxx (+00:00) Z (+0900);
-// text in single quotes is literal ('T'), '' is a quote.
+// ss s SSS a (AM/PM) EEEE (Monday) EEE (Mon) XXX (+09:00, Z for UTC) xxx (+00:00) Z (+0900)
+// VV (zone ID, e.g. Asia/Seoul) zzz (abbreviation, e.g. KST, EDT); text in single quotes is
+// literal ('T'), '' is a quote.
 
 using intrinsics as intr
 
@@ -14,64 +20,114 @@ public class DateTime {
     private Immutable Int64 millis
     // seconds east of UTC
     private Immutable Int64 offset
+    // IANA zone; null for a fixed offset
+    private Immutable String? zoneName
 
-    private DateTime(Int64 epochMillis, Int64 offsetSeconds) {
+    private DateTime(Int64 epochMillis, Int64 offsetSeconds, String? zone) {
         this.millis = epochMillis
         this.offset = offsetSeconds
+        this.zoneName = zone
+    }
+
+    // the instant `m` in `zone` (null: the local zone)
+    private static function DateTime at(Int64 m, String? zone) {
+        String? z = zone == null ? intr.tzLocalName() : zone
+        return new DateTime(m, intr.tzOffset(z, m), z)
+    }
+
+    // a wall-clock time in `zone` (null: the local zone)
+    private static function DateTime wall(&Int64[] fields, String? zone) {
+        String? z = zone == null ? intr.tzLocalName() : zone
+        m, off = intr.tzOffsetOf(z, fields)
+        return new DateTime(m, off, z)
+    }
+
+    private static function String checkZone(&String zone) {
+        if (!intr.tzValid(zone)) {
+            throw IllegalArgumentException(f"unknown time zone \"{zone}\" (use an IANA name such as \"Asia/Seoul\" or \"UTC\")")
+        }
+        return zone.clone()
     }
 
     // ------------------------------------------------------------------ creation
-    // the current local date and time
+    // the current date and time in the local zone
     public static function DateTime now() {
-        Int64 m = intr.timeNowMillis()
-        return new DateTime(m, intr.timeLocalOffset(m))
+        return DateTime.at(intr.timeNowMillis(), null)
+    }
+
+    // the current date and time in `zone`
+    public static function DateTime now(&String zone) {
+        return DateTime.at(intr.timeNowMillis(), DateTime.checkZone(zone))
     }
 
     public static function DateTime utcNow() {
-        return new DateTime(intr.timeNowMillis(), 0)
+        return new DateTime(intr.timeNowMillis(), 0, null)
     }
 
-    // a local date and time
+    // a date and time in the local zone
     public static function DateTime of(Int64 year, Int64 month, Int64 day, Int64 hour, Int64 minute, Int64 second) {
-        return DateTime.of(year, month, day, hour, minute, second, 0)
+        return DateTime.wall([year, month, day, hour, minute, second, 0], null)
     }
 
     public static function DateTime of(Int64 year, Int64 month, Int64 day) {
-        return DateTime.of(year, month, day, 0, 0, 0, 0)
+        return DateTime.wall([year, month, day, 0, 0, 0, 0], null)
     }
 
     public static function DateTime of(Int64 year, Int64 month, Int64 day, Int64 hour, Int64 minute, Int64 second, Int64 millisecond) {
-        Int64[] f = [year, month, day, hour, minute, second, millisecond]
-        Int64 off = intr.timeLocalOffsetOf(f)
-        return new DateTime(intr.timeFromFields(f, off), off)
+        return DateTime.wall([year, month, day, hour, minute, second, millisecond], null)
     }
 
-    // a date and time at a given offset from UTC (in seconds; 0 = UTC)
+    // a date and time in `zone`; a time skipped by a daylight saving change moves forward
+    // (02:30 becomes 03:30), a time that occurs twice takes the earlier offset
+    public static function DateTime ofZone(Int64 year, Int64 month, Int64 day, Int64 hour, Int64 minute, Int64 second, &String zone) {
+        return DateTime.wall([year, month, day, hour, minute, second, 0], DateTime.checkZone(zone))
+    }
+
+    public static function DateTime ofZone(Int64 year, Int64 month, Int64 day, &String zone) {
+        return DateTime.wall([year, month, day, 0, 0, 0, 0], DateTime.checkZone(zone))
+    }
+
+    // a date and time at a fixed offset from UTC (in seconds; 0 = UTC)
     public static function DateTime ofOffset(Int64 year, Int64 month, Int64 day, Int64 hour, Int64 minute, Int64 second, Int64 offsetSeconds) {
         Int64[] f = [year, month, day, hour, minute, second, 0]
-        return new DateTime(intr.timeFromFields(f, offsetSeconds), offsetSeconds)
+        return new DateTime(intr.timeFromFields(f, offsetSeconds), offsetSeconds, null)
     }
 
+    // the instant in the local zone
     public static function DateTime ofEpochMillis(Int64 epochMillis) {
-        return new DateTime(epochMillis, intr.timeLocalOffset(epochMillis))
+        return DateTime.at(epochMillis, null)
     }
 
     public static function DateTime ofEpochMillis(Int64 epochMillis, Int64 offsetSeconds) {
-        return new DateTime(epochMillis, offsetSeconds)
+        return new DateTime(epochMillis, offsetSeconds, null)
     }
 
-    // Parses `text` with `pattern`; without an offset in the pattern the text is local time.
+    public static function DateTime ofEpochMillis(Int64 epochMillis, &String zone) {
+        return DateTime.at(epochMillis, DateTime.checkZone(zone))
+    }
+
+    // Parses `text` with `pattern`; text without an offset or zone (XXX, VV) is local time.
     public static function DateTime parse(&String text, &String pattern) {
-        Int64[] r = intr.timeParse(text, pattern)
-        return new DateTime(r[0], r[1])
+        r, z = intr.timeParse(text, pattern, intr.tzLocalName())
+        return new DateTime(r[0], r[1], z)
     }
 
-    // ISO-8601: 2026-10-07T12:30:00, 2026-10-07T12:30:00.250+09:00, 2026-10-07T03:30:00Z, 2026-10-07
+    // text without an offset or zone is a time in `zone`
+    public static function DateTime parse(&String text, &String pattern, &String zone) {
+        r, z = intr.timeParse(text, pattern, DateTime.checkZone(zone))
+        return new DateTime(r[0], r[1], z)
+    }
+
+    // ISO-8601: 2026-10-07T12:30:00, 2026-10-07T12:30:00.250+09:00, 2026-10-07T03:30:00Z,
+    // 2026-10-07, and with a zone: 2026-10-07T12:30:00+09:00[Asia/Seoul]
     public static function DateTime parse(&String text) {
-        String[] patterns = ["yyyy-MM-dd'T'HH:mm:ss.SSSXXX", "yyyy-MM-dd'T'HH:mm:ssXXX", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd"]
+        String[] patterns = [
+            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX'['VV']'", "yyyy-MM-dd'T'HH:mm:ssXXX'['VV']'", "yyyy-MM-dd'T'HH:mm:ss.SSSXXX", "yyyy-MM-dd'T'HH:mm:ssXXX",
+            "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd"
+        ]
         for (p in patterns) {
             try {
-                return DateTime.parse(text.clone(), p.clone())
+                return DateTime.parse(text, p)
             } catch (IllegalArgumentException e) {
             }
         }
@@ -130,13 +186,26 @@ public class DateTime {
         return offset
     }
 
+    // the IANA zone, or null at a fixed offset
+    public function String? zone() {
+        return zoneName == null ? null : zoneName!.clone()
+    }
+
+    // the zone's abbreviation at this instant (KST, EDT, ...), or the offset as UTC+hh:mm
+    public function String zoneAbbreviation() {
+        return intr.timeFormat(millis, offset, "zzz", zoneName)
+    }
+
     // ------------------------------------------------------------------ arithmetic
+    // exact time: in a zone the wall clock may jump at daylight saving changes
     public function DateTime plus(&Duration d) {
-        return new DateTime(millis + d.toMillis(), offset)
+        Int64 m = millis + d.toMillis()
+        return zoneName == null ? new DateTime(m, offset, null) : DateTime.at(m, zone())
     }
 
     public function DateTime minus(&Duration d) {
-        return new DateTime(millis - d.toMillis(), offset)
+        Int64 m = millis - d.toMillis()
+        return zoneName == null ? new DateTime(m, offset, null) : DateTime.at(m, zone())
     }
 
     public function DateTime operator+(&Duration d) {
@@ -151,30 +220,39 @@ public class DateTime {
         return Duration.ofMillis(millis - earlier.millis)
     }
 
+    // calendar days: the same wall-clock time on another date (in a zone it may be 23 or 25
+    // hours later across a daylight saving change)
     public function DateTime plusDays(Int64 days) {
-        return new DateTime(millis + days * 86400000, offset)
+        m, off = intr.timeAddCalendar(millis, offset, 0, days, zoneName)
+        return new DateTime(m, off, zone())
     }
 
     // calendar months; the day is clamped to the month's length (Jan 31 + 1 month = Feb 28/29)
     public function DateTime plusMonths(Int64 months) {
-        return new DateTime(intr.timeAddMonths(millis, offset, months), offset)
+        m, off = intr.timeAddCalendar(millis, offset, months, 0, zoneName)
+        return new DateTime(m, off, zone())
     }
 
     public function DateTime plusYears(Int64 years) {
         return plusMonths(years * 12)
     }
 
-    // the same instant at another offset
+    // the same instant in another zone
+    public function DateTime inZone(&String zone) {
+        return DateTime.at(millis, DateTime.checkZone(zone))
+    }
+
+    // the same instant at a fixed offset
     public function DateTime withOffset(Int64 offsetSeconds) {
-        return new DateTime(millis, offsetSeconds)
+        return new DateTime(millis, offsetSeconds, null)
     }
 
     public function DateTime toUtc() {
-        return new DateTime(millis, 0)
+        return new DateTime(millis, 0, null)
     }
 
     public function DateTime toLocal() {
-        return new DateTime(millis, intr.timeLocalOffset(millis))
+        return DateTime.at(millis, null)
     }
 
     public function Boolean isBefore(&DateTime other) {
@@ -189,18 +267,19 @@ public class DateTime {
         return millis.compareTo(other.millis)
     }
 
-    // the same instant (whatever the offsets)
+    // the same instant (whatever the zones or offsets)
     public function Boolean equals(&DateTime other) {
         return millis == other.millis
     }
 
     // ------------------------------------------------------------------ text
     public function String format(&String pattern) {
-        return intr.timeFormat(millis, offset, pattern)
+        return intr.timeFormat(millis, offset, pattern, zoneName)
     }
 
-    // ISO-8601 with milliseconds and offset
+    // ISO-8601 with milliseconds and offset, then the zone in brackets
     public function String toString() {
-        return intr.timeFormat(millis, offset, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+        String s = intr.timeFormat(millis, offset, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX", null)
+        return zoneName == null ? s : f"{s}[{zoneName!}]"
     }
 }

@@ -1,0 +1,17 @@
+2026-10-07T21:05:00.000+09:00[Asia/Seoul]
+Asia/Seoul KST 32400
+2026-10-07T08:05:00.000-04:00[America/New_York] EDT true
+2026-10-07 08:05 EDT (America/New_York, -04:00)
+2026-03-07T12:00:00.000-05:00[America/New_York] -> plusDays(1) 2026-03-08T12:00:00.000-04:00[America/New_York] / +24h 2026-03-08T13:00:00.000-04:00[America/New_York]
+skipped 02:30 -> 2026-03-08T03:30:00.000-04:00[America/New_York]
+repeated 01:30 -> 2026-11-01T01:30:00.000-04:00[America/New_York] then +1h 2026-11-01T01:30:00.000-05:00[America/New_York]
+2026-02-28T00:00:00.000Z[Europe/London]
+2026-10-07T12:00:00.000+09:00[Asia/Seoul] Asia/Seoul
+2026-07-01T09:00:00.000+02:00[Europe/Paris] 2026-07-01T07:00:00.000Z
+2026-12-25T18:30:00.000+11:00[Australia/Sydney] AEDT
+1970-01-01T05:30:00.000+05:30[Asia/Kolkata]
+fixed offset fixed offset
+true false true
+-25200 CEST
+true
+unknown time zone "Mars/Olympus" (use an IANA name such as "Asia/Seoul" or "UTC")

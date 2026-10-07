@@ -241,7 +241,18 @@ pub struct Mods {
     pub getter: bool,
     /// `Some(true)` = `setter.chain`, `Some(false)` = `setter.nochain`.
     pub setter: Option<bool>,
+    /// `json["name", encode, decode]` on a field (spec 10.8).
+    pub json: Option<JsonSpec>,
     pub annotations: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct JsonSpec {
+    /// The JSON key; `None` = the field name.
+    pub name: Option<String>,
+    pub encode: bool,
+    pub decode: bool,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug)]

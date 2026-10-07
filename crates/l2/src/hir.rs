@@ -84,6 +84,10 @@ pub struct ClassInfo {
     pub equals_fn: Option<FuncId>,
     pub to_string_fn: Option<FuncId>,
     pub compare_fn: Option<FuncId>,
+    /// Generated `json[encode]` function: the object as a Dictionary (spec 10.8).
+    pub to_json_fn: Option<FuncId>,
+    /// Generated `json[decode]` function: a new object from a JSON object.
+    pub from_json_fn: Option<FuncId>,
     pub needs_drop: bool,
     pub is_throwable: bool,
 }

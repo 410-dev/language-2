@@ -384,7 +384,7 @@ impl<'p> ModGen<'p> {
     fn class_table(&mut self) -> String {
         let p = self.p;
         let mut out = String::new();
-        out.push_str("%ClassDesc = type { i32, ptr, i32, ptr, ptr, i32, ptr, ptr, ptr, ptr, ptr, i32 }\n");
+        out.push_str("%ClassDesc = type { i32, ptr, i32, ptr, ptr, i32, ptr, ptr, ptr, ptr, ptr, i32, ptr, ptr }\n");
         let mut entries = Vec::new();
         for (i, c) in p.classes.iter().enumerate() {
             let name = self.cstr(&c.name);
@@ -407,7 +407,7 @@ impl<'p> ModGen<'p> {
             };
             let f = |x: Option<FuncId>| x.map(|f| format!("@f.{}", f)).unwrap_or("null".into());
             entries.push(format!(
-                "%ClassDesc {{ i32 {}, ptr {}, i32 {}, ptr {}, ptr {}, i32 {}, ptr {}, ptr {}, ptr {}, ptr {}, ptr {}, i32 {} }}",
+                "%ClassDesc {{ i32 {}, ptr {}, i32 {}, ptr {}, ptr {}, i32 {}, ptr {}, ptr {}, ptr {}, ptr {}, ptr {}, i32 {}, ptr {}, ptr {} }}",
                 c.parent.map(|x| x as i64).unwrap_or(-1),
                 name,
                 nf,
@@ -419,7 +419,9 @@ impl<'p> ModGen<'p> {
                 f(c.compare_fn),
                 f(c.drop_fn),
                 ifs,
-                c.ifaces.len()
+                c.ifaces.len(),
+                f(c.to_json_fn),
+                f(c.from_json_fn)
             ));
         }
         let _ = writeln!(out, "@l2.classes = private constant [{} x %ClassDesc] [\n  {}\n]", entries.len(), entries.join(",\n  "));

@@ -1,0 +1,4 @@
+// error: use Regex.fancy(...) for back-references and look-around
+function void main() {
+    Boolean b = "aa".matches(r"(a)\1")
+}

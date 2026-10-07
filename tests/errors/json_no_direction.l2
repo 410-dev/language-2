@@ -1,0 +1,5 @@
+// error: json[...] needs encode, decode or both
+class A {
+    private json["a"] Int64 a = 0
+}
+function void main() {}

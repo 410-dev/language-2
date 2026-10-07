@@ -9,6 +9,7 @@
       "patterns": [
         { "include": "#comments" },
         { "include": "#annotations" },
+        { "include": "#raw_strings" },
         { "include": "#fstrings" },
         { "include": "#strings" },
         { "include": "#numbers" },
@@ -85,6 +86,14 @@
       "comment": "\"Hello %str%\".format(name)",
       "name": "constant.other.placeholder.l2",
       "match": "%[A-Za-z_]\\w*%"
+    },
+    "raw_strings": {
+      "comment": "r\"...\" and r#\"...\"#: no escapes, may span lines",
+      "name": "string.quoted.raw.l2",
+      "begin": "(r)(#*)(\")",
+      "end": "\"\\2",
+      "beginCaptures": { "1": { "name": "storage.type.string.l2" }, "3": { "name": "punctuation.definition.string.begin.l2" } },
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.l2" } }
     },
     "strings": {
       "name": "string.quoted.double.l2",
@@ -174,7 +183,7 @@
         { "name": "keyword.operator.new.l2", "match": "\\bnew\\b" },
         { "name": "storage.type.class.l2", "match": "\\b(class|interface)\\b" },
         { "name": "storage.modifier.l2", "match": "\\b(public|private|protected|static|Immutable|copied|extends|implements|throws|move)\\b" },
-        { "name": "storage.modifier.accessor.l2", "match": "\\b(getter|setter(?:\\.(?:chain|nochain))?)\\b" },
+        { "name": "storage.modifier.accessor.l2", "match": "\\b(getter|setter(?:\\.(?:chain|nochain))?|json(?=\\[))\\b" },
         { "name": "constant.language.boolean.l2", "match": "\\b(true|false)\\b" },
         { "name": "constant.language.null.l2", "match": "\\b(null|Null)\\b" },
         { "name": "variable.language.l2", "match": "\\b(this|super)\\b" },

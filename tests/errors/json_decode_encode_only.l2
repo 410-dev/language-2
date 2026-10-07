@@ -1,0 +1,8 @@
+// error: cannot be read from JSON: class A has no json[decode] fields
+using data.Json as Json
+class A {
+    private json[encode] Int64 a = 0
+}
+function void main() {
+    A x = Json.decode[A]("{}")
+}

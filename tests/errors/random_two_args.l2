@@ -1,0 +1,4 @@
+// error: String.random takes (pattern) or (pattern, minLength, maxLength)
+function void main() {
+    String s = String.random("[a-z]", 3)
+}

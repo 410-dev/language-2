@@ -151,8 +151,13 @@ PlatformTask t = new PlatformTask()
 | Boolean     | `true`, `false`                         |
 | Null        | `Null`, `null` (동일)                   |
 | 문자열      | `"text"`                                |
+| raw 문자열  | `r"C:\temp\new"`, `r#"say "hi""#`       |
 | 포맷 문자열 | `f"name={name}"`                        |
 | Dictionary  | `{"a": "b", "c": {"d": 1}}` (JSON 호환) |
+
+- **raw 문자열** `r"..."`: 역슬래시를 이스케이프로 해석하지 않는다. 정규식(`r"\d{3}-\d{4}"`)과 Windows 경로에 쓴다.
+- 큰따옴표를 넣으려면 `#`으로 감싼다: `r#"..."#`, `r##"..."##` (닫는 따옴표 뒤에 같은 수의 `#`).
+- raw 문자열은 여러 줄에 걸칠 수 있다. 줄바꿈은 `\n`으로 저장한다 (CRLF 파일의 `\r`은 버린다).
 
 ---
 
@@ -786,6 +791,37 @@ public class Point3 extends Point {
 - 오버라이드는 동적으로 선택되며, `stdio.println`, 문자열 연결, f-string, 포맷 지정자(11.1), 컨테이너 안의 값 출력, 잡히지 않은 예외 메시지에 모두 쓰인다.
 - `super.toString()`: 상위 클래스의 구현을 호출한다. 상위 클래스들에 구현이 없으면 기본 형식 `Name(field=value, ...)`을 돌려준다.
 
+### 10.8 JSON 필드 (`json[...]`)
+필드의 JSON 변환 여부를 getter/setter처럼 필드 수정자로 지정한다.
+```
+public class User {
+    private json["user_name", encode, decode] String name = ""   // JSON 이름 "user_name"
+    private json[encode, decode] Int64 age = 0                  // 이름 생략: 필드 이름 "age"
+    private json[encode, decode] Address? address = null        // json[...] 필드가 있는 클래스
+    private json["created", encode] String createdAt = ""       // 쓰기만 (decode 안 함)
+    private json["password", decode] String secret = ""         // 읽기만 (encode 안 함)
+    private Int64 visits = 0                                    // JSON과 무관
+    public User() {}
+}
+
+String text = user.toJson()                  // {"user_name":"Ann","age":31,...}, toJson(2): 들여쓰기
+User u = data.Json.decode[User](text)        // JSON 텍스트 → 객체
+User[] us = data.Json.decode[User[]](text)   // 배열, Dictionary[String, User], Nullable 등도 가능
+User v = data.Json.convert[User](&parsed)    // 이미 파싱한 DTVariable → 객체
+```
+- 형식: `json["이름", encode, decode]`. 이름은 생략할 수 있고(필드 이름 사용), `encode`와 `decode` 중 하나 이상이 있어야 한다 (둘 다 없으면 컴파일 에러).
+  - `encode`: 객체를 JSON으로 바꿀 때(`toJson`, `Json.stringify`) 이 필드를 포함한다.
+  - `decode`: JSON에서 객체를 만들 때(`Json.decode`, `Json.convert`) 이 필드를 채운다.
+  - 하나만 있으면 다른 방향은 하지 않는다. `json[...]`이 없는 필드는 어느 방향에도 쓰이지 않는다.
+- 접근 제어와 무관하다 (`private` 필드도 지정할 수 있다). 상속받은 `json[...]` 필드도 포함되며, 같은 JSON 이름을 두 필드가 쓰면 컴파일 에러.
+- 디코딩: 매개변수 없는 생성자로 객체를 만든 뒤(접근 제어 무관), JSON에 있는 키의 `decode` 필드만 대입한다. 없는 키는 생성자가 정한 값을 유지하고, JSON의 모르는 키는 무시한다.
+  - `decode` 필드가 있는 클래스에 매개변수 없는 생성자가 없으면 컴파일 에러. `Immutable` 필드는 `decode`할 수 없다 (컴파일 에러).
+  - 값은 필드 타입으로 검사하며 변환한다: 정수 범위, 소수부가 있는 수를 정수로 읽기, 문자열/숫자 불일치, `null`을 non-null 필드에 넣기 등은 `IllegalArgumentException`이며 메시지에 위치가 들어간다 (`User.tags[0]: expected String, found a number`).
+  - 필드 타입: 숫자, `String`, `Boolean`, `IntLarge`, 배열, `Dictionary`(키는 String 또는 정수), 튜플, Nullable, 유니온, `decode` 필드가 있는 클래스, `DTVariable`(값 그대로). 인터페이스와 함수 타입은 디코딩할 수 없다.
+- 인코딩: `encode` 필드를 선언 순서대로(상위 클래스 필드 먼저) JSON 객체로 쓴다. 필드 값 안의 객체도 같은 규칙으로 쓰며, `encode` 필드가 없는 클래스의 객체는 `IllegalArgumentException`. 서로를 참조하는 객체는 깊이 제한(256)에서 `IllegalArgumentException`.
+- `Json.decode[T]`에서 `T`(또는 그 원소 타입)가 `decode` 필드가 없는 클래스이면 컴파일 에러.
+- 구현 노트: 컴파일러가 클래스마다 인코딩/디코딩 함수를 생성하고 런타임은 `toString`처럼 클래스 정보로 이를 호출한다.
+
 ---
 
 ## 11. 문자열
@@ -823,7 +859,8 @@ f"{s!r}"              // 변환: !r (따옴표 붙은 형식), !s (표시 형식
 ### 11.2 정적 멤버
 | 멤버                                                 | 설명                        |
 | ---------------------------------------------------- | --------------------------- |
-| `String.random(regex, min_length, max_length)`       | 정규식에 맞는 무작위 문자열 |
+| `String.random(pattern)`                             | 정규식 전체에 맞는 무작위 문자열 (14.15) |
+| `String.random(pattern, minLength, maxLength)`       | 길이가 `[min, max]`인 무작위 문자열 |
 | `String.array(length = x, length_immutable = false)` | 배열 생성                   |
 | `String.array()`                                     | 가변 길이 배열 생성         |
 
@@ -832,7 +869,12 @@ f"{s!r}"              // 변환: !r (따옴표 붙은 형식), !s (표시 형식
 | -------------------------------------------------- | --------------------------------- | ---- |
 | `.format(a, b, ...)`                               | `%str%`, `%number%` 순서대로 치환 |      |
 | `.formatWithInjection(a, b, ...)`                  | 주입 허용 치환                    |      |
-| `.randomize(regex, min_length, max_length)`        | 무작위 값으로 변경                | 변경 |
+| `.randomize(pattern)`                              | 같은 길이의, 패턴에 맞는 무작위 문자열로 변경 | 변경 |
+| `.matches(pattern)`                                | 문자열 전체가 정규식에 맞는지     |      |
+| `.containsMatch(pattern)`                          | 정규식에 맞는 부분이 있는지       |      |
+| `.findAll(pattern)`                                | 맞는 부분들 (`String[]`)          |      |
+| `.replaceRegex(pattern, replacement)`              | 맞는 부분을 모두 치환 (`$1`, `$name`) |  |
+| `.splitRegex(pattern)`                             | 맞는 부분을 구분자로 분할         |      |
 | `.replace(a, b, limit, reverse)`                   | 치환                              |      |
 | `.substring(a, b)`                                 | 부분 문자열                       |      |
 | `.startsWith(a)` / `.endsWith(a)` / `.contains(a)` | 검사                              |      |
@@ -848,6 +890,23 @@ f"{s!r}"              // 변환: !r (따옴표 붙은 형식), !s (표시 형식
 | `.toJson()`                                        | JSON 문자열 표현 (14.5)           |      |
 
 - 변경 메서드는 `Immutable String`에 호출할 수 없다.
+
+**정규식으로 만드는 무작위 문자열** (`String.random`, `.randomize`)
+```
+String.random(r"[A-Z]{3}-\d{4}")       // "QKD-0381": 패턴 전체에 맞는 문자열
+String.random("[a-f0-9]", 32, 32)       // 길이 32의 16진 문자열
+String token = "        "
+token.randomize("[A-Za-z0-9]")          // 원래 길이(8)를 유지
+String phone = "000-0000"
+phone.randomize(r"\d{3}-\d{4}")
+```
+- 패턴은 14.15의 정규식 문법이다. 결과는 항상 패턴 **전체**에 맞는다. 길이는 문자 수다.
+- 가능한 길이 중 하나를 고른 뒤(길이를 지정하면 그 범위 안에서), 선택지(`|`), 반복 횟수, 문자를 고르게 무작위로 고른다. 반복은 정확히 요청 길이가 되도록 나뉜다.
+- 한 문자만 맞는 패턴(`"[a-z0-9]"`, `"\w"`)에 길이를 주면 그 패턴을 길이만큼 반복한다.
+- 길이를 주지 않으면 `*`, `+`, `{n,}` 같은 무한 반복은 최소 길이보다 최대 16자까지 늘어난다.
+- 넓은 문자 클래스(`.`, `\w`, `[^...]` 등 256자 초과)는 그중 출력 가능한 ASCII 문자에서 고른다. 한글 등은 범위를 명시한다 (`[가-힣]`).
+- 패턴으로 그 길이를 만들 수 없으면 `IllegalArgumentException` (`"ab".randomize(r"\d{3}")`). 리터럴 패턴의 문법 오류는 컴파일 에러.
+- 난수는 프로그램의 기본 생성기를 쓰므로 `L2_SEED`로 재현할 수 있다. 역참조와 전후방 탐색(`Regex.fancy` 전용 문법)은 쓸 수 없다.
 
 ---
 
@@ -893,6 +952,38 @@ x.floor(2, 1)   // 100.4
 - `(w, d)` 형태는 정수부와 소수부를 독립적으로 처리한 뒤 더한다. 소수부가 올림되어 1이 되면 정수부에 더해진다 (`6.67.round(1, 0)` = `10 + 1` = `11.0`).
 - `(w, d)`에서 `w`, `d`가 음수이면 `IllegalArgumentException`. 인자는 최대 2개.
 - 정수 타입에서는 정수부 자릿수(`10^w`, 또는 음수 `d`)만 의미가 있다. 결과가 타입 범위를 넘으면 파일의 `IntegerOverflow` 정책을 따른다 (`error`일 때 `ArithmeticException`).
+
+### 12.3 수학 함수
+숫자의 메서드로 제공한다. 같은 함수가 `math.Math`의 정적 함수로도 있다 (14.14). 이름은 줄이지 않고 쓴다.
+
+| 메서드                                   | 설명                                            | 결과 타입 |
+| ---------------------------------------- | ----------------------------------------------- | --------- |
+| `.squareRoot()`                          | 제곱근 √x                                       | 실수      |
+| `.cubeRoot()`                            | 세제곱근 ∛x                                     | 실수      |
+| `.powerOf(y)`                            | x의 y제곱 (`2.0.powerOf(10.0)` = 1024.0)        | 실수      |
+| `.exponential()`                         | e의 x제곱                                       | 실수      |
+| `.logarithm()`                           | 자연로그 ln x                                   | 실수      |
+| `.logarithm(base)`                       | 밑이 `base`인 로그                              | 실수      |
+| `.logarithmBase2()` / `.logarithmBase10()` | 밑이 2 / 10인 로그                            | 실수      |
+| `.sine()` / `.cosine()` / `.tangent()`   | 삼각함수 (라디안)                               | 실수      |
+| `.arcSine()` / `.arcCosine()` / `.arcTangent()` | 역삼각함수 (라디안)                      | 실수      |
+| `.arcTangent2(x)`                        | 점 (x, y)의 각도 (y가 수신자), -π..π            | 실수      |
+| `.hyperbolicSine()` / `.hyperbolicCosine()` / `.hyperbolicTangent()` | 쌍곡선 함수 | 실수      |
+| `.hypotenuse(y)`                         | √(x² + y²) (중간 오버플로 없음)                 | 실수      |
+| `.toRadians()` / `.toDegrees()`          | 도 ↔ 라디안                                     | 실수      |
+| `.sign()`                                | 부호: -1, 0, 1 (실수는 -1.0, ±0.0, 1.0, NaN)    | 같은 타입 |
+| `.clamp(min, max)`                       | `min..max` 범위로 자르기                        | 같은 타입 |
+| `.truncate()`                            | 0 쪽으로 버림 (실수)                            | 같은 타입 |
+| `.isNaN()` / `.isInfinite()` / `.isFinite()` | 특수 값 검사 (정수는 항상 유한)             | Boolean   |
+| `.greatestCommonDivisor(b)`              | 최대공약수 (정수 전용)                          | 같은 타입 |
+| `.leastCommonMultiple(b)`                | 최소공배수 (정수 전용)                          | 같은 타입 |
+| `.integerSquareRoot()`                   | ⌊√x⌋ (정수 전용)                                | 같은 타입 |
+| `.modularPower(e, m)`                    | xᵉ mod m (정수 전용, `IntLarge`도 빠르게)      | 같은 타입 |
+
+- "실수" 결과: 수신자가 `Float16`/`Float32`/`Float64`이면 그 타입, 정수이면 `Float64`. 실수 인자는 `Float64`로 받는다. `Float16`/`Float32`는 `Float64`로 계산한 뒤 해당 정밀도로 반올림한다.
+- 정의역 밖의 값은 IEEE 754를 따른다: `(-1.0).squareRoot()`는 `NaN`, `0.0.logarithm()`은 `-Infinity`. 예외는 없다.
+- 결과는 모든 운영체제와 세 백엔드에서 비트 단위로 같다 (순수 Rust 수학 라이브러리 `libm`). 따라서 플랫폼 C 라이브러리와 마지막 자리가 다를 수 있다 (오차 1 ulp 미만).
+- 정수 함수의 결과가 타입 범위를 넘으면 파일의 `IntegerOverflow` 정책을 따른다. `integerSquareRoot`의 음수, `modularPower`의 음수 지수나 0 이하의 법은 `ArithmeticException`. `clamp`의 `min > max`는 `IllegalArgumentException`.
 
 ---
 
@@ -1058,7 +1149,8 @@ DTVariable v = data.Json.parse(json)
 - 인코딩: `"utf-8"`, `"utf-16le"`, `"utf-16be"`, `"ascii"`, `"latin-1"` (대소문자, `-` 무시). 표현할 수 없는 문자나 잘못된 바이트는 `IllegalArgumentException`.
 - `Bytes` 메서드: `length`, `isEmpty`, `b[i]`, `b[i] = v`, `+`, `slice`, `append`, `indexOf`, `decode`, `toHex`, `toBase64`, `toArray`, `equalsConstantTime`(비밀 값 비교용), `==`(내용 비교), 정적 `zeros`, `fromHex`, `fromBase64`, `random`.
 - `toBytes` / `fromBytes`: 타입 크기만큼의 2의 보수(정수) 또는 IEEE 754(실수) 표현. `IntLarge`는 최소 길이 2의 보수. `fromBytes`의 길이가 맞지 않으면 `IllegalArgumentException`.
-- JSON: 객체 → `Dictionary[String, DTVariable]`, 배열 → `DTVariable[]`, 정수 → `Int64`(넘치면 `IntLarge`), 그 밖의 수 → `Float64`, `null` → `Null`. `toJson`은 문자열, 숫자, `Boolean`, 배열, `Dictionary`, 튜플을 지원하며 객체와 NaN/무한대는 `IllegalArgumentException`. `data.Json.stringify(&v)` / `stringify(&v, indent)`도 같다.
+- JSON: 객체 → `Dictionary[String, DTVariable]`, 배열 → `DTVariable[]`, 정수 → `Int64`(넘치면 `IntLarge`), 그 밖의 수 → `Float64`, `null` → `Null`. `toJson`은 문자열, 숫자, `Boolean`, 배열, `Dictionary`, 튜플, `json[encode]` 필드가 있는 객체(10.8)를 지원하며, NaN/무한대는 `IllegalArgumentException`. `data.Json.stringify(&v)` / `stringify(&v, indent)`도 같다.
+- 타입이 있는 값으로 읽기: `data.Json.decode[T](text)`, `data.Json.convert[T](&value)` (10.8).
 
 ### 14.6 `system`: 프로세스, 셸, 플랫폼별 작업
 ```
@@ -1128,6 +1220,27 @@ t.plusMonths(1)  t.plusDays(3)  t + d  u - t  t.toUtc()  t.withOffset(3600)
 - `DateTime`: 밀리초 정밀도의 날짜와 시각 + 고정 UTC 오프셋. 지역 시간의 오프셋은 운영체제의 시간대 규칙을 따른다. 그레고리력을 모든 연도에 적용한다. 필드: `year`, `month`(1~12), `day`, `hour`, `minute`, `second`, `millisecond`, `dayOfWeek`(1=월요일), `dayOfYear`, `epochMillis`, `offsetSeconds`. `==`는 같은 순간인지 비교한다.
 - 형식 패턴: `yyyy yy MMMM MMM MM M dd d HH H hh h mm m ss s SSS a EEEE EEE XXX xxx Z`, 작은따옴표 안은 글자 그대로. 잘못된 날짜나 형식은 `IllegalArgumentException`. 오프셋이 없는 텍스트는 지역 시간이다.
 - `sleep`은 `System.sleep` / `Thread.sleep`에 있다 (14.6).
+
+**IANA 시간대**
+```
+DateTime t = DateTime.ofZone(2026, 10, 7, 21, 5, 0, "Asia/Seoul")   // 2026-10-07T21:05:00.000+09:00[Asia/Seoul]
+DateTime ny = t.inZone("America/New_York")                          // 같은 순간, 08:05 EDT
+DateTime.now("Europe/Paris")   DateTime.ofEpochMillis(0, "Asia/Kolkata")
+ny.zone()  ny.zoneAbbreviation()  ny.format("yyyy-MM-dd HH:mm zzz (VV)")
+DateTime.parse("2026-10-07T12:00:00+09:00[Asia/Seoul]")
+DateTime.parse("2026-07-01 09:00", "yyyy-MM-dd HH:mm", "Europe/Paris")
+TimeZone.local()  TimeZone.available()  TimeZone.isValid("Asia/Seoul")
+TimeZone.offsetSeconds("America/Los_Angeles", &t)  TimeZone.abbreviation("Europe/Berlin", &t)
+```
+- `DateTime`은 IANA 시간대를 갖거나(`now()`, `of()`, `ofZone()`, `inZone()`, `toLocal()`, 시간대가 있는 텍스트), 고정 오프셋을 갖는다(`ofOffset()`, `withOffset()`, `toUtc()`, 오프셋만 있는 텍스트). `zone()`은 시간대 이름 또는 `null`.
+- 시간대가 있으면 그 시간대의 규칙(서머타임 포함)으로 순간마다 오프셋이 정해진다.
+  - `plus(Duration)`, `+ Duration`: 정확한 시간을 더한다. 서머타임 전환을 지나면 벽시계가 1시간 다르게 움직인다.
+  - `plusDays`, `plusMonths`, `plusYears`: 같은 벽시계 시각의 다른 날짜. 전환일을 지나면 실제 간격은 23시간 또는 25시간이다.
+  - 존재하지 않는 시각(시계가 앞으로 가는 구간, 예: 뉴욕 2026-03-08 02:30)은 그 간격만큼 뒤로 옮긴다(03:30 EDT). 두 번 나타나는 시각(시계가 뒤로 가는 구간)은 이른 쪽 오프셋을 쓴다. Java의 `ZonedDateTime`과 같다.
+- `toString()`: 시간대가 있으면 `2026-10-07T21:05:00.000+09:00[Asia/Seoul]`처럼 끝에 시간대를 붙인다. `parse(text)`는 이 형식도 읽는다.
+- 패턴 문자 `VV`는 시간대 이름(시간대가 없으면 오프셋), `zzz`/`z`는 약어(`KST`, `EDT`; 시간대가 없으면 `UTC+09:00`).
+- 알 수 없는 시간대 이름은 `IllegalArgumentException`.
+- 시간대 규칙 데이터: Linux/macOS는 운영체제의 zoneinfo 데이터베이스(운영체제 업데이트로 갱신), Windows는 런타임에 포함된 데이터를 쓴다.
 
 ### 14.8 `io`: 파일, 디렉터리, 경로
 ```
@@ -1224,6 +1337,42 @@ language-2 sdk path        // SDK 홈
 - 구조: `<홈>/sdk/<버전>/bin/language-2`(툴체인), `<홈>/sdk/<버전>/lib/<타깃 트리플>/`(정적·공유 런타임). 여러 버전이 나란히 설치된다.
 - 툴체인은 프로그램의 `@using sdk N`에 맞는 설치된 툴체인으로 명령을 넘기고 (2.3), `IncludeDependencies=false`로 만든 실행 파일은 해당 버전의 공유 런타임을 불러온다 (2.5).
 
+### 14.14 `math.Math`
+```
+using math.Math as Math
+Math.PI  Math.E  Math.TAU  Math.INFINITY  Math.NOT_A_NUMBER
+Math.squareRoot(2.0)  Math.powerOf(2.0, 0.5)  Math.logarithm(8.0, 2.0)  Math.arcTangent2(1.0, 1.0)
+Math.hypotenuse(3.0, 4.0)  Math.minimum(a, b)  Math.maximum(a, b)  Math.absolute(x)
+```
+- 12.3의 숫자 메서드를 `Float64` 정적 함수로도 제공한다 (`Math.sine(x)`는 `x.sine()`과 같다).
+- 상수: `PI`(π), `E`(자연로그의 밑), `TAU`(2π), `INFINITY`, `NOT_A_NUMBER`.
+
+### 14.15 `text.Regex`: 정규식
+```
+using text.Regex as Regex
+Regex date = new Regex(r"(?<year>\d{4})-(?<month>\d{2})-(\d{2})")
+Match? m = date.find("due 2026-10-07")
+m!.text()  m!.start()  m!.end()  m!.group(3)  m!.group("year")  m!.groups()
+date.test(s)  date.matchesAll(s)  date.findAll(s)  date.find(s, from)
+date.replace(s, "$month/$3/$year")  date.replaceFirst(s, "...")
+date.replace(s, (&Match d) -> d.group("year")!)        // 함수로 치환
+new Regex(r"\s*,\s*").split("a , b,c")                 // ["a", "b", "c"], split(s, limit)
+new Regex("hello", "i")                                 // 플래그
+Regex.fancy(r"\b(\w+) \1\b")                           // 역참조, 전후방 탐색
+Regex.escape("1+1=2?")                                  // "1\+1=2\?"
+"2026-10-07".matches(r"\d{4}-\d{2}-\d{2}")              // String 메서드 (11.3)
+```
+- **두 엔진**
+  - `new Regex(...)`: 선형 시간 엔진. 매칭 시간이 텍스트 길이에 비례함을 보장하므로, 신뢰할 수 없는 패턴이나 입력으로 프로그램을 멈추게 할 수 없다(ReDoS 불가). 역참조와 전후방 탐색은 지원하지 않는다.
+  - `Regex.fancy(...)`: 백트래킹 엔진. 역참조(`\1`, `\k<name>`), 전방/후방 탐색(`(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`)을 지원한다. 최악의 경우 시간이 지수적으로 늘 수 있으므로 신뢰할 수 있는 패턴에 쓴다.
+- 문법: Perl/Rust 계열. 문자 클래스, `\d \w \s \b`, 수량자(`* + ? {n,m}`, 게으른 `*?`), 이름 있는 그룹 `(?<name>...)`, 비캡처 그룹 `(?:...)`, 인라인 플래그 `(?i)`. 유니코드를 기본으로 지원한다 (`\w`는 한글도 포함).
+- 플래그(두 번째 인자): `i` 대소문자 무시, `m` `^`/`$`가 줄 단위, `s` `.`이 줄바꿈에도 맞음, `x` 패턴의 공백과 `#` 주석 무시.
+- 위치(`start`, `end`, `find(s, from)`)는 String 메서드와 같은 **문자 단위** 인덱스다.
+- 치환 문자열: `$1`, `$name`, `${name}`, `$$`(달러 기호). `replace`는 모두, `replaceFirst`는 처음 하나를 바꾼다.
+- `Match`: `text()`, `start()`, `end()`, `group(i)`(0은 전체), `group(name)`, `groups()`, `groupCount()`, `groupStart(i)`, `groupEnd(i)`. 참여하지 않은 그룹은 `null`.
+- 잘못된 패턴은 `IllegalArgumentException`. 리터럴 패턴(`new Regex("...")`, `Regex.fancy("...")`, String의 정규식 메서드)은 컴파일할 때 검사한다. 선형 엔진에 역참조를 쓰면 `Regex.fancy`를 쓰라는 메시지가 나온다.
+- String 메서드(`matches`, `containsMatch`, `findAll`, `replaceRegex`, `splitRegex`)는 선형 엔진을 쓰며, 컴파일된 패턴을 내부적으로 캐시한다.
+
 ---
 
 ## 15. 컴파일러 아키텍처
@@ -1261,7 +1410,7 @@ language-2 sdk path        // SDK 홈
 | 1    | 라이브러리 및 패키지 시스템         | 패키지·import·이름 해석(14.1, 14.3), `math.linear`(14.4) 완료. 외부 라이브러리 배포는 미정 |
 | 2    | 공유 소유권 타입 `Shared[T]`        | 참조 카운팅                               |
 | 3    | Dictionary 키로 사용할 수 있는 타입 | 클래스를 키로 쓸 때의 해시 규칙           |
-| 4    | 표준 라이브러리 전반                | 입출력, 네트워크, 시간, 암호화, 컬렉션, JSON 완료(14.5~14.12). 남은 것: 정규식, 수학 함수(`sqrt`, 삼각함수), 압축, 날짜의 IANA 시간대 이름 |
+| 4    | 표준 라이브러리 전반                | 입출력, 네트워크, 시간(IANA 시간대), 암호화, 컬렉션, JSON(객체 포함), 정규식, 수학 함수 완료(10.8, 12.3, 14.5~14.15). 남은 것: 압축 |
 | 5    | 사용자 정의 `Numeric` 타입           | 연산자 오버로딩한 클래스(복소수 등)를 `Tensor` 요소로 |
 | 6    | 멀티스레딩                          | `Thread` 생성, 채널/뮤텍스, `Promise`·`PlatformTask.executePromise` 구현, 동시 접속 서버 |
 | 7    | FFI와 `sys.win32`                   | C ABI 함수 호출(`extern`), 그 위의 운영체제 API 라이브러리 |

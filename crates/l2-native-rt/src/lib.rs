@@ -51,6 +51,8 @@ pub struct ClassDesc {
     pub drop: Option<DropFn>,
     pub ifaces: *const i32,
     pub nifaces: i32,
+    pub to_json: Option<ToStringFn>,
+    pub from_json: Option<ToStringFn>,
 }
 
 struct Class {
@@ -64,6 +66,8 @@ struct Class {
     compare: Option<CompareFn>,
     drop: Option<DropFn>,
     ifaces: Vec<u32>,
+    to_json: Option<ToStringFn>,
+    from_json: Option<ToStringFn>,
 }
 
 struct State {
@@ -162,6 +166,24 @@ impl Host for NHost {
             });
         }
         default_object_string(o, self)
+    }
+    fn obj_to_json(&mut self, o: &Rc<Object>) -> Result<Option<Value>, Value> {
+        let f = ST.with(|s| s.borrow().classes.get(o.class as usize).and_then(|c| c.to_json));
+        let Some(f) = f else { return Ok(None) };
+        let r = f(bx(Value::Object(o.clone())));
+        Self::check()?;
+        let v = unsafe { val(r) };
+        unsafe { l2_free(r) };
+        Ok(Some(v))
+    }
+    fn obj_from_json(&mut self, cls: u32, v: &Value) -> Result<Option<Value>, Value> {
+        let f = ST.with(|s| s.borrow().classes.get(cls as usize).and_then(|c| c.from_json));
+        let Some(f) = f else { return Ok(None) };
+        let r = f(bx(v.clone()));
+        Self::check()?;
+        let out = unsafe { val(r) };
+        unsafe { l2_free(r) };
+        Ok(Some(out))
     }
     fn obj_default_string(&mut self, o: &Rc<Object>) -> Result<String, Value> {
         default_object_string(o, self)
@@ -279,6 +301,8 @@ pub unsafe extern "C" fn l2_rt_init(classes: *const ClassDesc, n: i32, exc: *con
             compare: d.compare,
             drop: d.drop,
             ifaces: (0..d.nifaces as usize).map(|j| *d.ifaces.add(j) as u32).collect(),
+            to_json: d.to_json,
+            from_json: d.from_json,
         });
     }
     let excs = (0..nexc as usize).map(|i| *exc.add(i) as u32).collect();

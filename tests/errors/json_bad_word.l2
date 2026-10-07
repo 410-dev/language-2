@@ -1,0 +1,5 @@
+// error: json[...] takes an optional "name" and the words encode and/or decode
+class A {
+    private json[write] Int64 a = 0
+}
+function void main() {}

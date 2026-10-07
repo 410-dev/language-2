@@ -381,6 +381,9 @@ impl<'a> Checker<'a> {
 
     /// `C.name(args)`: a static method of class `c` (or `C.array(...)`).
     pub fn static_call(&mut self, c: ClassId, name: &str, args: &'a [ast::Arg], span: Span) -> HExpr {
+        if name == "fancy" && args.len() == 1 && self.cmeta[c as usize].template == "text.Regex" {
+            self.check_regex_literal(&args[0].value, true);
+        }
         let ms: Vec<MethodInfo> = self.lookup_methods(Owner::Class(c), name).into_iter().filter(|m| m.is_static).collect();
         if ms.is_empty() {
             if name == "array" {
@@ -396,6 +399,10 @@ impl<'a> Checker<'a> {
     /// Constructs class `fqn`: explicit type arguments, the expected type's, inferred from the
     /// constructor arguments, or the defaults.
     pub fn construct_named(&mut self, fqn: &str, targs: Option<Vec<Type>>, args: &'a [ast::Arg], expected: Option<&Type>, span: Span) -> HExpr {
+        // literal patterns are checked now rather than when the program runs
+        if fqn == "text.Regex" && args.len() == 1 {
+            self.check_regex_literal(&args[0].value, false);
+        }
         let nparams = self.class_decls[fqn].1.type_params.len();
         if nparams == 0 || targs.is_some() {
             return match self.class_for(fqn, targs, None, span) {
@@ -493,6 +500,10 @@ impl<'a> Checker<'a> {
                     }
                 }
                 let _ = callee;
+                // `Class.method[T](...)`: a generic static method
+                if let Some(c) = self.static_class_of(obj, None) {
+                    return Some(self.static_call_targs(c, name, targs, args, span));
+                }
                 Some(self.call_method_targs(obj, name, targs, args, span))
             }
             _ => None,
@@ -513,6 +524,26 @@ impl<'a> Checker<'a> {
             }
         }
         Some(tys)
+    }
+
+    /// `Class.method[T](args)`: a generic static method with explicit type arguments.
+    fn static_call_targs(&mut self, c: ClassId, name: &str, targs: &'a [ast::Expr], args: &'a [ast::Arg], span: Span) -> HExpr {
+        let gs: Vec<MethodInfo> = self.lookup_methods(Owner::Class(c), name).into_iter().filter(|m| m.generic.is_some() && m.is_static && m.param_names.len() == args.len()).collect();
+        let Some(m) = gs.first().cloned() else {
+            let n = self.classes[c as usize].name.clone();
+            self.err(span, format!("class '{}' has no generic static method '{}' taking {} argument(s)", n, name, args.len()));
+            return self.bad(span);
+        };
+        let Some(tys) = self.type_args(targs) else { return self.bad(span) };
+        let Owner::Class(oc) = m.owner else { unreachable!() };
+        self.check_access(m.access, oc, span, &m.name);
+        let Some(fid) = self.instantiate_method(oc, m.generic.unwrap(), tys, span) else {
+            return self.bad(span);
+        };
+        let sig = self.sigs[fid as usize].clone();
+        let out = self.check_args_against(&sig.params, args);
+        self.note_throws(&sig.throws, span);
+        HExpr::new(H::Call(fid, out), sig.ret, span)
     }
 
     /// `obj.method[T](args)`: a generic method with explicit type arguments.
@@ -553,6 +584,30 @@ impl<'a> Checker<'a> {
     }
 
     // ------------------------------------------------------------------ intrinsics
+    /// Whether values of type `t` can be built from JSON; `Err` names the reason.
+    fn json_decodable(&self, t: &Type) -> Result<(), String> {
+        match t {
+            Type::Class(c) => {
+                if self.classes[*c as usize].from_json_fn.is_some() {
+                    Ok(())
+                } else {
+                    Err(format!("class {} has no json[decode] fields", self.classes[*c as usize].name))
+                }
+            }
+            Type::Array(e) | Type::Nullable(e) => self.json_decodable(e),
+            Type::Dict(k, v) => {
+                if !matches!(**k, Type::Str | Type::Int(_) | Type::Dyn) {
+                    return Err("Dictionary keys must be String or an integer type".into());
+                }
+                self.json_decodable(v)
+            }
+            Type::Tuple(ts) | Type::Union(ts) => ts.iter().try_for_each(|t| self.json_decodable(t)),
+            Type::Iface(_) => Err("interfaces cannot be decoded (use a class)".into()),
+            Type::Func(_, _) => Err("functions have no JSON form".into()),
+            _ => Ok(()),
+        }
+    }
+
     /// The language type of a system-operation signature letter (see `l2_runtime::sys`).
     fn sig_type(c: char) -> Type {
         match c {
@@ -595,6 +650,31 @@ impl<'a> Checker<'a> {
     pub fn intrinsic_call(&mut self, name: &str, targs: Option<&'a [ast::Expr]>, args: &'a [ast::Arg], span: Span) -> HExpr {
         if let Some(op) = l2_runtime::sys::SysOp::by_name(name) {
             return self.sys_intrinsic(op, args, span);
+        }
+        // jsonDecode[T](text) / jsonConvert[T](value): JSON into a typed value (spec 10.8)
+        if name == "jsonDecode" || name == "jsonConvert" {
+            let Some(ts) = targs else {
+                self.err(span, format!("intrinsic '{}' needs the result type: {}[T](...)", name, name));
+                return self.bad(span);
+            };
+            let Some(tys) = self.type_args(ts) else { return self.bad(span) };
+            let Some(t) = tys.first().cloned() else { return self.bad(span) };
+            if args.len() != 1 {
+                self.err(span, format!("intrinsic '{}' takes 1 argument", name));
+                return self.bad(span);
+            }
+            if let Err(what) = self.json_decodable(&t) {
+                self.err(span, format!("{} cannot be read from JSON: {}", self.tname(&t), what));
+            }
+            let pty = if name == "jsonDecode" { Type::Str } else { Type::Dyn };
+            let x = self.expr(&args[0].value, Some(&pty));
+            let x = if pty == Type::Dyn { x } else { self.coerce(x, &pty, args[0].value.span) };
+            let code = HExpr::new(H::Lit(Lit::Str(rt_type(&t).encode())), Type::Str, span);
+            if name == "jsonDecode" {
+                return HExpr::new(H::Builtin(Builtin::JsonDecode, vec![x, code]), t, span);
+            }
+            let path = HExpr::new(H::Lit(Lit::Str("$".into())), Type::Str, span);
+            return HExpr::new(H::Builtin(Builtin::JsonConvert, vec![x, code, path]), t, span);
         }
         let wrap = self.cur_ref().wrap;
         let arity = match name {

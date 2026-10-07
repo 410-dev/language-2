@@ -378,7 +378,7 @@ pub fn migrate_value<H: Host>(v: &Value, to: &RtType, mode: RoundMode, h: &mut H
 // bulk kernels
 
 /// A host that only records the error (used on worker threads, where no objects exist).
-struct ErrHost;
+pub struct ErrHost;
 
 impl Host for ErrHost {
     type Err = (ExcKind, String);

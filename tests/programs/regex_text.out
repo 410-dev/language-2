@@ -1,0 +1,28 @@
+C:\temp\new say "hi"
+Match("2026-10-07" at 3..13) 2026 07 ["2026", "10", "07"] 3..13
+["2026-10-07", "2027-01-31"]
+2027-01-31
+true
+준비 10/07/2026, 마감 01/31/2027.
+준비 [date], 마감 2027-01-31.
+준비 <26>, 마감 <27>.
+true true false 3
+["a", "b", "c", "d"]
+["a", "b;c ,d"]
+true Regex(hello, i)
+["one", "three"]
+is is
+25
+1\+1=2\?
+true
+true false true
+a#b#c#
+["a", "b", "c", ""]
+["1", "22", "333"]
+8 true
+10 true
+true
+8 true
+true
+3 true
+the pattern cannot produce a string of length 2

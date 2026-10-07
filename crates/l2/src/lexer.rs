@@ -430,6 +430,11 @@ impl<'a> Lexer<'a> {
                     let s = self.string()?;
                     self.push(Tok::Str(s), span);
                 }
+                // raw strings: r"..." and r#"..."# (no escapes; may span lines)
+                'r' if self.raw_string_hashes().is_some() => {
+                    let s = self.raw_string()?;
+                    self.push(Tok::Str(s), span);
+                }
                 'f' if self.peek_at(1) == '"' => {
                     self.bump();
                     let parts = self.fstring()?;
@@ -501,6 +506,39 @@ impl<'a> Lexer<'a> {
             }
             other => return Err(self.err(format!("unknown escape sequence '\\{}'", other))),
         })
+    }
+
+    /// At `r`: the number of `#` of a raw string opener (`r"`, `r#"`, `r##"` ...).
+    fn raw_string_hashes(&self) -> Option<usize> {
+        let mut n = 0;
+        while self.peek_at(1 + n) == '#' {
+            n += 1;
+        }
+        (self.peek_at(1 + n) == '"').then_some(n)
+    }
+
+    fn raw_string(&mut self) -> Result<String, Diag> {
+        let start = self.span();
+        let hashes = self.raw_string_hashes().unwrap_or(0);
+        for _ in 0..hashes + 2 {
+            self.bump();
+        }
+        let mut s = String::new();
+        loop {
+            if self.pos >= self.chars.len() {
+                return Err(Diag::error(start, "unterminated raw string literal"));
+            }
+            if self.peek() == '"' && (1..=hashes).all(|k| self.peek_at(k) == '#') {
+                for _ in 0..hashes + 1 {
+                    self.bump();
+                }
+                return Ok(s);
+            }
+            let c = self.bump();
+            if c != '\r' {
+                s.push(c);
+            }
+        }
     }
 
     fn string(&mut self) -> Result<String, Diag> {
@@ -871,6 +909,14 @@ mod tests {
                 Eof
             ]
         );
+    }
+
+    #[test]
+    fn raw_strings() {
+        use Tok::*;
+        assert_eq!(toks(r##"r"\d+\n" r#"say "hi""# r"#""##), vec![Str(r"\d+\n".into()), Str(r#"say "hi""#.into()), Str("#".into()), Newline, Eof]);
+        assert_eq!(toks("r\"a\r\nb\""), vec![Str("a\nb".into()), Newline, Eof]);
+        assert_eq!(toks("r + 1"), vec![Ident("r".into()), Plus, Int(1), Newline, Eof]);
     }
 
     #[test]

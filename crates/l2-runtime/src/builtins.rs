@@ -42,6 +42,11 @@ builtins! {
     DictKeys, DictValues,
     // rounding, formatting, default toString
     NumRound, NumCeil, NumFloor, NumAbs, FormatValue, DefaultToString,
+    // mathematical functions: receiver, wrap, operation (math::MathOp), arguments...
+    NumMath,
+    // JSON and objects (spec 10.8): JsonObject(value, class name), JsonConvert(value, type
+    // code, path), JsonDecode(text, type code)
+    JsonObject, JsonConvert, JsonDecode,
     // bulk numeric kernels (math.linear intrinsics)
     TensorZip, TensorScalar, TensorMatMul, TensorRound, TensorMigrate, TensorTranspose,
     // standard library system services: args[0] is the operation (sys::SysOp)
@@ -118,98 +123,10 @@ fn random_f64() -> f64 {
     (next_random() >> 11) as f64 / (1u64 << 53) as f64
 }
 
-/// Generates a random string whose characters come from the character set described by the
-/// first atom of `regex` (`[a-z0-9]`, `\d`, `\w`, `.`), or from its literal characters.
-pub fn random_string(regex: &str, min: i64, max: i64) -> String {
-    let set = regex_charset(regex);
-    let (lo, hi) = (min.max(0), max.max(min.max(0)));
-    let len = lo + random_below((hi - lo + 1) as u128) as i64;
-    let mut s = String::new();
-    if set.is_empty() {
-        return s;
-    }
-    for _ in 0..len {
-        s.push(set[random_below(set.len() as u128) as usize]);
-    }
-    s
-}
-
-fn regex_charset(re: &str) -> Vec<char> {
-    let chars: Vec<char> = re.chars().collect();
-    let mut i = 0;
-    let mut set = Vec::new();
-    let push_range = |set: &mut Vec<char>, a: char, b: char| {
-        for c in a..=b {
-            set.push(c);
-        }
-    };
-    while i < chars.len() {
-        match chars[i] {
-            '[' => {
-                i += 1;
-                let negate = i < chars.len() && chars[i] == '^';
-                if negate {
-                    i += 1;
-                }
-                let mut cls = Vec::new();
-                while i < chars.len() && chars[i] != ']' {
-                    let c = if chars[i] == '\\' && i + 1 < chars.len() {
-                        i += 1;
-                        match chars[i] {
-                            'd' => {
-                                push_range(&mut cls, '0', '9');
-                                i += 1;
-                                continue;
-                            }
-                            'w' => {
-                                push_range(&mut cls, 'a', 'z');
-                                push_range(&mut cls, 'A', 'Z');
-                                push_range(&mut cls, '0', '9');
-                                cls.push('_');
-                                i += 1;
-                                continue;
-                            }
-                            c => c,
-                        }
-                    } else {
-                        chars[i]
-                    };
-                    if i + 2 < chars.len() && chars[i + 1] == '-' && chars[i + 2] != ']' {
-                        push_range(&mut cls, c, chars[i + 2]);
-                        i += 3;
-                    } else {
-                        cls.push(c);
-                        i += 1;
-                    }
-                }
-                if negate {
-                    let all: Vec<char> = (' '..='~').collect();
-                    cls = all.into_iter().filter(|c| !cls.contains(c)).collect();
-                }
-                return cls;
-            }
-            '\\' if i + 1 < chars.len() => {
-                match chars[i + 1] {
-                    'd' => push_range(&mut set, '0', '9'),
-                    'w' => {
-                        push_range(&mut set, 'a', 'z');
-                        push_range(&mut set, 'A', 'Z');
-                        push_range(&mut set, '0', '9');
-                        set.push('_');
-                    }
-                    c => set.push(c),
-                }
-                return set;
-            }
-            '.' => return (' '..='~').collect(),
-            '*' | '+' | '?' | '{' | '}' | '(' | ')' | '|' | '^' | '$' => {}
-            c => set.push(c),
-        }
-        i += 1;
-    }
-    set.sort();
-    set.dedup();
-    set
+/// A random string matching all of `pattern` (spec 11.2), with a length in `bounds` (characters)
+/// when given. Uses the program's random generator, so `L2_SEED` makes it reproducible.
+pub fn random_string<H: Host>(pattern: &str, bounds: Option<(usize, usize)>, h: &mut H) -> Result<String, H::Err> {
+    crate::regex_gen::generate(pattern, bounds, &mut |n| random_below(n as u128) as usize).map_err(|e| h.throw(ExcKind::IllegalArgument, e))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -538,7 +455,19 @@ pub fn call<H: Host>(b: Builtin, args: Vec<Value>, h: &mut H) -> Result<Value, H
             let ty = RtType::decode(&arg_str(&args, 1)).unwrap_or(RtType::Str);
             parse_as(&s, &ty, h)?
         }
-        StrRandom => Value::str(random_string(&arg_str(&args, 0), arg_int(&args, 1, 0) as i64, arg_int(&args, 2, 16) as i64)),
+        StrRandom => {
+            // pattern [, minLength, maxLength]
+            let bounds = if args.len() >= 3 {
+                let (lo, hi) = (arg_int(&args, 1, 0), arg_int(&args, 2, 0));
+                if lo < 0 || hi < lo {
+                    return Err(h.throw(ExcKind::IllegalArgument, format!("invalid length range {}..{}", lo, hi)));
+                }
+                Some((lo as usize, hi as usize))
+            } else {
+                None
+            };
+            Value::str(random_string(&arg_str(&args, 0), bounds, h)?)
+        }
 
         // ---------------- numbers
         NumFormat => Value::str(format_number(&a0(), arg_int(&args, 1, -1) as i64, arg_int(&args, 2, -1) as i64)),
@@ -764,6 +693,26 @@ pub fn call<H: Host>(b: Builtin, args: Vec<Value>, h: &mut H) -> Result<Value, H
             let dim = |i: usize| arg_int(&args, i, 0).max(0) as usize;
             numeric::transpose(&args[0], dim(1), dim(2), h)?
         }
+        NumMath => {
+            let op = crate::math::MathOp::from_code(arg_int(&args, 2, 0) as u16);
+            crate::math::call(op, &args[0], &args[3..], args[1].deref().as_bool(), h)?
+        }
+        JsonObject => match a0() {
+            Value::Dict(d) => Value::Dict(d),
+            other => {
+                let kind = crate::sys::json_kind(&other);
+                return Err(h.throw(ExcKind::IllegalArgument, format!("{}: expected a JSON object, found {}", arg_str(&args, 1), kind)));
+            }
+        },
+        JsonConvert => {
+            let ty = RtType::decode(&arg_str(&args, 1)).unwrap_or(RtType::Any);
+            crate::sys::json_convert(&a0(), &ty, &arg_str(&args, 2), h)?
+        }
+        JsonDecode => {
+            let ty = RtType::decode(&arg_str(&args, 1)).unwrap_or(RtType::Any);
+            let v = crate::sys::json_parse(&arg_str(&args, 0)).map_err(|e| h.throw(ExcKind::IllegalArgument, e))?;
+            crate::sys::json_convert(&v, &ty, "$", h)?
+        }
         Sys => crate::sys::call(arg_int(&args, 0, 0) as u16, &args[1..], h)?,
 
         _ => {
@@ -820,7 +769,12 @@ pub fn call_mut<H: Host>(b: Builtin, recv: &mut Value, args: Vec<Value>, h: &mut
             Value::Void
         }
         StrRandomize => {
-            *recv = Value::str(random_string(&arg_str(&args, 0), arg_int(&args, 1, 0) as i64, arg_int(&args, 2, 16) as i64));
+            // keeps the string's length (in characters)
+            let n = match &*recv {
+                Value::Str(s) => s.chars().count(),
+                _ => 0,
+            };
+            *recv = Value::str(random_string(&arg_str(&args, 0), Some((n, n)), h)?);
             Value::Void
         }
         NumRandomize => {

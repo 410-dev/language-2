@@ -1,0 +1,97 @@
+// json[...] field modifiers: objects to and from JSON (spec 10.8).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using data.Json as Json
+
+class Address {
+    private json["city", encode, decode] String city = ""
+    private json[encode, decode] Int64 zip = 0
+    public Address() {}
+    public Address(String city, Int64 zip) {
+        this.city = city
+        this.zip = zip
+    }
+}
+
+class User {
+    private json["user_name", encode, decode] String name = ""
+    private json[encode, decode] Int64 age = 0
+    private json[encode, decode] String[] tags = []
+    private json[encode, decode] Address? address = null
+    // written but never read back
+    private json["created", encode] String createdAt = "2026-10-07"
+    // read but never written
+    private json["password", decode] String secret = ""
+    // not part of JSON at all
+    private Int64 visits = 7
+
+    public User() {}
+
+    public User(String name, Int64 age) {
+        this.name = name
+        this.age = age
+    }
+
+    public function void tag(String t) {
+        tags.add(t)
+    }
+
+    public function void moveTo(Address a) {
+        this.address = a
+    }
+
+    public function String summary() {
+        String where = address == null ? "nowhere" : "somewhere"
+        return f"{name} ({age}) {tags} {where} secret={secret} visits={visits} created={createdAt}"
+    }
+}
+
+class Admin extends User {
+    private json[encode, decode] Int64 level = 1
+    public Admin() {
+        super()
+    }
+    public function Int64 level() {
+        return level
+    }
+}
+
+function void main() {
+    User u = new User("Ann", 31)
+    u.tag("admin")
+    u.tag("ops")
+    u.moveTo(new Address("Seoul", 4524))
+    stdio.println(u.toJson())
+    stdio.println(Json.stringify(&u, 2))
+
+    User back = Json.decode[User]("{\"user_name\": \"Bob\", \"age\": 40, \"tags\": [\"x\"], \"address\": {\"city\": \"Busan\", \"zip\": 48058}, \"password\": \"hunter2\", \"created\": \"ignored\", \"extra\": 1}")
+    stdio.println(back.summary())
+    stdio.println(back.toJson())
+
+    // missing keys keep the constructor's values
+    User partial = Json.decode[User]("{\"age\": 5}")
+    stdio.println(partial.summary())
+
+    User[] many = Json.decode[User[]]("[{\"user_name\": \"a\"}, {\"user_name\": \"b\", \"address\": null}]")
+    stdio.println(many.map((x) -> x.summary()))
+    Dictionary[String, Address] byName = Json.decode[Dictionary[String, Address]]("{\"home\": {\"city\": \"Jeju\", \"zip\": 63000}}")
+    stdio.println(byName.get("home").toJson())
+    Int64[] nums = Json.decode[Int64[]]("[1, 2, 3]")
+    stdio.println(nums)
+
+    Admin a = Json.decode[Admin]("{\"user_name\": \"root\", \"level\": 9}")
+    stdio.println(f"{a.level()} {a.toJson()}")
+
+    DTVariable parsed = Json.parse("{\"user_name\": \"Cy\", \"age\": 3}")
+    stdio.println(Json.convert[User](&parsed).summary())
+
+    for (bad in ["{\"age\": \"old\"}", "{\"tags\": [1]}", "[1]", "{\"address\": {\"zip\": 1.5}}", "{\"age\": 99999999999999999999}"]) {
+        try {
+            Json.decode[User](bad)
+        } catch (IllegalArgumentException e) {
+            stdio.println(f"error: {e.getMessage()}")
+        }
+    }
+}

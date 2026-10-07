@@ -1,0 +1,57 @@
+// Mathematical functions of numbers and math.Math (spec 12.3, 14.14).
+@using sdk 1
+@runtime compiler interpreter bytecode
+@compiler(EnableSoftwareEmulation=true)
+
+using stdio as stdio
+using math.Math as Math
+
+function void main() {
+    Float64 x = 2.0
+    stdio.println(f"{x.squareRoot()} {27.0.cubeRoot()} {x.powerOf(10.0)} {1.0.exponential()}")
+    stdio.println(f"{Math.E.logarithm()} {8.0.logarithm(2.0)} {1024.0.logarithmBase2()} {0.001.logarithmBase10()}")
+    stdio.println(f"{(Math.PI / 6.0).sine():.12f} {Math.PI.cosine()} {(Math.PI / 4.0).tangent():.12f}")
+    stdio.println(f"{1.0.arcSine()} {0.0.arcCosine()} {1.0.arcTangent()} {Math.arcTangent2(-1.0, -1.0)}")
+    stdio.println(f"{1.0.hyperbolicSine()} {0.0.hyperbolicCosine()} {Math.hyperbolicTangent(100.0)}")
+    stdio.println(f"{180.0.toRadians()} {Math.TAU.toDegrees()} {Math.hypotenuse(3.0, 4.0)}")
+
+    // Float32 stays Float32, integers give Float64
+    Float32 f = 2.0
+    stdio.println(f"{f.squareRoot()} {(9).squareRoot()} {Int64.MAX.squareRoot()}")
+    Float16 h = 10.0
+    stdio.println(h.logarithmBase10())
+
+    // special values follow IEEE 754
+    Float64 nan = (-1.0).squareRoot()
+    stdio.println(f"{nan} {nan.isNaN()} {(1.0 / 0.0).isInfinite()} {x.isFinite()} {0.0.logarithm()}")
+
+    // sign, clamp, truncate
+    stdio.println(f"{(-7).sign()} {0.sign()} {(-2.5).sign()} {(-2.7).truncate()} {2.7.truncate()}")
+    stdio.println(f"{15.clamp(0, 10)} {(-3).clamp(0, 10)} {0.5.clamp(0.0, 1.0)}")
+    try {
+        5.clamp(10, 0)
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+
+    // integers
+    stdio.println(f"{12.greatestCommonDivisor(18)} {4.leastCommonMultiple(6)} {99.integerSquareRoot()} {4.modularPower(13, 497)}")
+    IntLarge big = 2
+    IntLarge p = 1000000007
+    stdio.println(f"{(big ** 200).integerSquareRoot()} {big.modularPower(1000000, p)}")
+    IntLarge a = 123456789012345678901234567890
+    IntLarge b = 987654321098765432109876543210
+    stdio.println(a.greatestCommonDivisor(b))
+    Int8 small = 100
+    try {
+        small.leastCommonMultiple(3)
+    } catch (ArithmeticException e) {
+        stdio.println(e.getMessage())
+    }
+    try {
+        (-4).integerSquareRoot()
+    } catch (ArithmeticException e) {
+        stdio.println(e.getMessage())
+    }
+    stdio.println(f"{Math.minimum(1.5, -2.0)} {Math.maximum(1.5, -2.0)} {Math.absolute(-3.25)} {Math.powerOf(2.0, 0.5)}")
+}

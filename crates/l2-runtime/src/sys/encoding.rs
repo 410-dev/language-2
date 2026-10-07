@@ -92,7 +92,7 @@ pub fn decode<H: Host>(b: &[u8], enc: &str, h: &mut H) -> Result<String, H::Err>
             }
         },
         e @ ("utf16" | "utf16le" | "utf16be") => {
-            if b.len() % 2 != 0 {
+            if !b.len().is_multiple_of(2) {
                 return Err(bad(h, "UTF-16"));
             }
             let units: Vec<u16> = b.chunks(2).map(|c| if e == "utf16be" { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) }).collect();
@@ -381,9 +381,145 @@ fn json_write<H: Host>(v: &Value, ind: usize, depth: usize, out: &mut String, h:
             }
             out.push('}');
         }
+        Value::Object(o) => {
+            if depth > 256 {
+                return Err(h.throw(ExcKind::IllegalArgument, "JSON nesting too deep (objects that refer to each other?)".into()));
+            }
+            match h.obj_to_json(&o)? {
+                Some(d) => json_write(&d, ind, depth, out, h)?,
+                None => {
+                    let n = h.class_name(o.class);
+                    return Err(h.throw(ExcKind::IllegalArgument, format!("class {} has no json[encode] fields", n)));
+                }
+            }
+        }
         other => return Err(h.throw(ExcKind::IllegalArgument, format!("JSON cannot represent a value of type {}", other.type_name()))),
     }
     Ok(())
+}
+
+/// What a parsed JSON value is, for error messages.
+pub fn json_kind(v: &Value) -> &'static str {
+    match v.deref() {
+        Value::Null | Value::Void => "null",
+        Value::Bool(_) => "a Boolean",
+        Value::Int(..) | Value::Big(_) | Value::Float(..) => "a number",
+        Value::Str(_) => "a string",
+        Value::Array(_) | Value::Tuple(_) => "an array",
+        Value::Dict(_) => "an object",
+        _ => "a value",
+    }
+}
+
+/// Converts a parsed JSON value to the type `ty` (spec 10.8, data.Json.decode); `path` names
+/// the place for error messages (`User.address`, `$[2]`).
+pub fn json_convert<H: Host>(v: &Value, ty: &RtType, path: &str, h: &mut H) -> Result<Value, H::Err> {
+    let v = v.deref();
+    let mismatch = |h: &mut H, want: &str| h.throw(ExcKind::IllegalArgument, format!("{}: expected {}, found {}", path, want, json_kind(&v)));
+    Ok(match ty {
+        RtType::Any => v,
+        RtType::Nullable(t) => {
+            if v.is_null() {
+                Value::Null
+            } else {
+                json_convert(&v, t, path, h)?
+            }
+        }
+        RtType::Int(t) => {
+            let x = match &v {
+                Value::Int(_, x) => Some(*x),
+                Value::Big(b) => b.to_i128(),
+                Value::Float(_, f) if f.fract() == 0.0 && f.abs() < 1e38 => Some(*f as i128),
+                _ => return Err(mismatch(h, t.name())),
+            };
+            match x {
+                Some(x) if t.fits(x) => Value::Int(*t, x),
+                _ => return Err(h.throw(ExcKind::IllegalArgument, format!("{}: number out of range for {}", path, t.name()))),
+            }
+        }
+        RtType::Big => match &v {
+            Value::Int(_, x) => Value::Big(Rc::new(BigInt::from_i128(*x))),
+            Value::Big(_) => v.clone(),
+            _ => return Err(mismatch(h, "IntLarge")),
+        },
+        RtType::Float(t) => match &v {
+            Value::Int(_, x) => Value::Float(*t, t.round(*x as f64)),
+            Value::Big(b) => Value::Float(*t, t.round(b.to_f64())),
+            Value::Float(_, f) => Value::Float(*t, t.round(*f)),
+            _ => return Err(mismatch(h, t.name())),
+        },
+        RtType::Bool => match v {
+            Value::Bool(_) => v,
+            _ => return Err(mismatch(h, "Boolean")),
+        },
+        RtType::Str => match v {
+            Value::Str(_) => v,
+            _ => return Err(mismatch(h, "String")),
+        },
+        RtType::Array(e) => match &v {
+            Value::Array(a) => {
+                let mut out = Vec::with_capacity(a.items.len());
+                for (i, x) in a.items.iter().enumerate() {
+                    out.push(json_convert(&x, e, &format!("{}[{}]", path, i), h)?);
+                }
+                Value::array(out, false)
+            }
+            _ => return Err(mismatch(h, "an array")),
+        },
+        RtType::Tuple(ts) => match &v {
+            Value::Array(a) if a.items.len() == ts.len() => {
+                let mut out = Vec::with_capacity(ts.len());
+                for (i, (x, t)) in a.items.iter().zip(ts.iter()).enumerate() {
+                    out.push(json_convert(&x, t, &format!("{}[{}]", path, i), h)?);
+                }
+                Value::Tuple(Rc::new(out))
+            }
+            _ => return Err(mismatch(h, &format!("an array of {} values", ts.len()))),
+        },
+        RtType::Dict(k, val) => match &v {
+            Value::Dict(d) => {
+                let mut out = DictVal::default();
+                for (key, x) in &d.entries {
+                    let ks = match key {
+                        Value::Str(s) => s.to_string(),
+                        other => ops::to_display(other, h)?,
+                    };
+                    let kv = match &**k {
+                        RtType::Str | RtType::Any => Value::str(ks.clone()),
+                        other => match ks.parse::<i128>() {
+                            Ok(n) => json_convert(&Value::i64(n as i64), other, &format!("{} key \"{}\"", path, ks), h)?,
+                            Err(_) => return Err(h.throw(ExcKind::IllegalArgument, format!("{}: key \"{}\" is not a number", path, ks))),
+                        },
+                    };
+                    let xv = json_convert(x, val, &format!("{}.{}", path, ks), h)?;
+                    out.insert(kv, xv);
+                }
+                Value::Dict(Rc::new(out))
+            }
+            _ => return Err(mismatch(h, "an object")),
+        },
+        RtType::Class(c) => {
+            if v.is_null() {
+                return Err(mismatch(h, &h.class_name(*c)));
+            }
+            match h.obj_from_json(*c, &v)? {
+                Some(o) => o,
+                None => {
+                    let n = h.class_name(*c);
+                    return Err(h.throw(ExcKind::IllegalArgument, format!("{}: class {} has no json[decode] fields", path, n)));
+                }
+            }
+        }
+        RtType::Union(ts) => {
+            for t in ts {
+                if let Ok(x) = json_convert(&v, t, path, &mut crate::numeric::ErrHost) {
+                    return Ok(x);
+                }
+            }
+            return Err(mismatch(h, "one of the union's types"));
+        }
+        _ => return Err(h.throw(ExcKind::IllegalArgument, format!("{}: this type cannot be read from JSON", path))),
+    })
 }
 
 /// Parses JSON: objects become `Dictionary[String, DTVariable]`, integers `Int64` (or

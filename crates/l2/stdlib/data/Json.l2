@@ -17,6 +17,18 @@ public class Json {
         return intr.jsonParse(text)
     }
 
+    // JSON text into a value of type T: a class with json[decode] fields, an array,
+    // Dictionary, number, String, Boolean or nullable of those
+    //     User u = Json.decode[User](text)
+    public static function T decode[T](&String text) {
+        return intr.jsonDecode[T](text)
+    }
+
+    // an already parsed JSON value into T
+    public static function T convert[T](&DTVariable value) {
+        return intr.jsonConvert[T](value)
+    }
+
     // compact JSON text
     public static function String stringify(&DTVariable value) {
         return intr.jsonStringify(value, 0)

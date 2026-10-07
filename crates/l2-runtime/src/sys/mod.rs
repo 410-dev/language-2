@@ -14,6 +14,7 @@ mod encoding;
 mod fs;
 mod net;
 mod proc;
+pub mod regex;
 mod time;
 
 use crate::value::*;
@@ -21,7 +22,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-pub use encoding::{json_parse, json_stringify};
+pub use encoding::{json_convert, json_kind, json_parse, json_stringify};
 
 macro_rules! sys_ops {
     ($($name:ident = $sig:literal),* $(,)?) => {
@@ -67,6 +68,21 @@ sys_ops! {
     cellNew = "D>H",
     cellGet = "H>D",
     cellSet = "HD>V",
+
+    // ---------------- regular expressions
+    regexNew = "SSB>H",
+    regexGroupNames = "H>A",
+    regexFind = "HSI>L",
+    regexFindAll = "HS>L",
+    regexReplace = "HSSI>S",
+    regexSplit = "HSI>A",
+    regexEscape = "S>S",
+    regexCheck = "SB>s",
+    strMatches = "SS>B",
+    strContainsMatch = "SS>B",
+    strReplaceRegex = "SSS>S",
+    strSplitRegex = "SS>A",
+    strFindAllRegex = "SS>A",
 
     // ---------------- system
     sysSleep = "I>V",
@@ -144,13 +160,17 @@ sys_ops! {
     // ---------------- time
     timeNowMillis = ">I",
     timeMonotonicNanos = ">I",
-    timeLocalOffset = "I>I",
-    timeLocalOffsetOf = "L>I",
     timeFields = "II>L",
     timeFromFields = "LI>I",
-    timeAddMonths = "III>I",
-    timeFormat = "IIS>S",
-    timeParse = "SS>L",
+    timeAddCalendar = "IIIIs>(II)",
+    timeFormat = "IISs>S",
+    timeParse = "SSs>(Ls)",
+    tzLocalName = ">s",
+    tzAvailable = ">A",
+    tzValid = "S>B",
+    tzOffset = "sI>I",
+    tzOffsetOf = "sL>(II)",
+    tzAbbreviation = "sI>S",
     durationString = "I>S",
 
     // ---------------- randomness
@@ -225,6 +245,7 @@ pub enum Resource {
     RsaPublic(Box<rsa::RsaPublicKey>),
     RsaPrivate(Box<rsa::RsaPrivateKey>),
     Cell(Value),
+    Regex(Box<regex::Compiled>),
 }
 
 fn handle(kind: &'static str, r: Resource) -> Value {
@@ -401,7 +422,8 @@ pub fn call<H: Host>(code: u16, args: &[Value], h: &mut H) -> Result<Value, H::E
             Ok(Value::Void)
         }
         tcpConnect | tcpListen | tcpAccept | tcpRead | tcpReadLine | tcpWrite | tcpSetTimeout | tcpLocalAddress | tcpPeerAddress | tcpShutdown | udpBind | udpSend | udpReceive | udpSetTimeout | httpRequest => net::call(op, &a, h),
-        timeNowMillis | timeMonotonicNanos | timeLocalOffset | timeLocalOffsetOf | timeFields | timeFromFields | timeAddMonths | timeFormat | timeParse | durationString => time::call(op, &a, h),
+        regexNew | regexGroupNames | regexFind | regexFindAll | regexReplace | regexSplit | regexEscape | regexCheck | strMatches | strContainsMatch | strReplaceRegex | strSplitRegex | strFindAllRegex => regex::call(op, &a, h),
+        timeNowMillis | timeMonotonicNanos | timeFields | timeFromFields | timeAddCalendar | timeFormat | timeParse | durationString | tzLocalName | tzAvailable | tzValid | tzOffset | tzOffsetOf | tzAbbreviation => time::call(op, &a, h),
         _ => crypto::call(op, &a, h),
     }
 }

@@ -1,0 +1,27 @@
+{"user_name":"Ann","age":31,"tags":["admin","ops"],"address":{"city":"Seoul","zip":4524},"created":"2026-10-07"}
+{
+  "user_name": "Ann",
+  "age": 31,
+  "tags": [
+    "admin",
+    "ops"
+  ],
+  "address": {
+    "city": "Seoul",
+    "zip": 4524
+  },
+  "created": "2026-10-07"
+}
+Bob (40) ["x"] somewhere secret=hunter2 visits=7 created=2026-10-07
+{"user_name":"Bob","age":40,"tags":["x"],"address":{"city":"Busan","zip":48058},"created":"2026-10-07"}
+ (5) [] nowhere secret= visits=7 created=2026-10-07
+["a (0) [] nowhere secret= visits=7 created=2026-10-07", "b (0) [] nowhere secret= visits=7 created=2026-10-07"]
+{"city":"Jeju","zip":63000}
+[1, 2, 3]
+9 {"user_name":"root","age":0,"tags":[],"address":null,"created":"2026-10-07","level":9}
+Cy (3) [] nowhere secret= visits=7 created=2026-10-07
+error: User.age: expected Int64, found a string
+error: User.tags[0]: expected String, found a number
+error: User: expected a JSON object, found an array
+error: Address.zip: expected Int64, found a number
+error: User.age: number out of range for Int64

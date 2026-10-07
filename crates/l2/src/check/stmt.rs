@@ -76,6 +76,46 @@ impl<'a> Checker<'a> {
                 }
                 out
             }
+            JobKind::JsonEncode => {
+                let this = self.this_expr(span).unwrap();
+                let c = job.class.unwrap();
+                let jf = self.cmeta[c as usize].json_fields.clone();
+                let mut entries = Vec::new();
+                for j in jf.iter().filter(|j| j.encode) {
+                    let fty = self.classes[c as usize].fields[j.field as usize].ty.clone();
+                    let read = HExpr::new(H::Field(Box::new(this.clone()), j.field), fty, span);
+                    let v = self.coerce(read, &Type::Dyn, span);
+                    entries.push((HExpr::new(H::Lit(Lit::Str(j.key.clone())), Type::Str, span), v));
+                }
+                vec![st(StmtKind::Return(Some(HExpr::new(H::Dict(entries), sig.ret.clone(), span))), span)]
+            }
+            JobKind::JsonDecode(ctor) => {
+                // $d = the JSON object; $o = new C(); for each decode field present: $o.f = convert(...)
+                let c = job.class.unwrap();
+                let cname = self.classes[c as usize].name.clone();
+                let dty = Type::Dict(Box::new(Type::Str), Box::new(Type::Dyn));
+                let dl = self.add_local("$json", dty.clone(), span, true, false);
+                let value = HExpr::new(H::Local(params[0]), Type::Dyn, span);
+                let mut out = vec![st(StmtKind::Let(dl, Some(HExpr::new(H::Builtin(Builtin::JsonObject, vec![value, HExpr::new(H::Lit(Lit::Str(cname.clone())), Type::Str, span)]), dty.clone(), span))), span)];
+                let ol = self.add_local("$obj", Type::Class(c), span, false, false);
+                out.push(st(StmtKind::Let(ol, Some(HExpr::new(H::New(c, ctor, vec![]), Type::Class(c), span))), span));
+                let jf = self.cmeta[c as usize].json_fields.clone();
+                for j in jf.iter().filter(|j| j.decode) {
+                    let field = self.classes[c as usize].fields[j.field as usize].clone();
+                    let d = HExpr::new(H::Local(dl), dty.clone(), span);
+                    let key = HExpr::new(H::Lit(Lit::Str(j.key.clone())), Type::Str, span);
+                    let has = HExpr::new(H::Builtin(Builtin::DictContainsKey, vec![d.clone(), key.clone()]), Type::Bool, span);
+                    let raw = HExpr::new(H::Builtin(Builtin::DictGet, vec![d, key]), Type::Dyn, span);
+                    let code = HExpr::new(H::Lit(Lit::Str(rt_type(&field.ty).encode())), Type::Str, span);
+                    let path = HExpr::new(H::Lit(Lit::Str(format!("{}.{}", cname, field.name))), Type::Str, span);
+                    let conv = HExpr::new(H::Builtin(Builtin::JsonConvert, vec![raw, code, path]), field.ty.clone(), span);
+                    let obj = HExpr::new(H::Local(ol), Type::Class(c), span);
+                    let assign = st(StmtKind::Assign(Place::Field(Box::new(obj), j.field), conv), span);
+                    out.push(st(StmtKind::If(has, vec![assign], vec![]), span));
+                }
+                out.push(st(StmtKind::Return(Some(HExpr::new(H::Move(ol), Type::Class(c), span))), span));
+                out
+            }
             JobKind::Delegate(df) => {
                 let mut args = Vec::new();
                 for &p in &params {

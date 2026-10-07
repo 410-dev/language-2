@@ -1,0 +1,38 @@
+@using sdk 1
+
+// time.TimeZone: IANA time zones (spec 14.7). Rules come from the system's zoneinfo database
+// on Linux and macOS (updated with the operating system) and a bundled copy on Windows.
+
+using intrinsics as intr
+
+public class TimeZone {
+    // the system's zone ("Asia/Seoul"); null when the system does not name it
+    public static function String? local() {
+        return intr.tzLocalName()
+    }
+
+    // every zone name, sorted
+    public static function String[] available() {
+        return intr.tzAvailable()
+    }
+
+    public static function Boolean isValid(&String zone) {
+        return intr.tzValid(zone)
+    }
+
+    // UTC offset in seconds of `zone` at the instant `at`
+    public static function Int64 offsetSeconds(&String zone, &DateTime at) {
+        if (!intr.tzValid(zone)) {
+            throw IllegalArgumentException(f"unknown time zone \"{zone}\"")
+        }
+        return intr.tzOffset(zone, at.epochMillis())
+    }
+
+    // the abbreviation of `zone` at the instant `at` (KST, EST, EDT, ...)
+    public static function String abbreviation(&String zone, &DateTime at) {
+        if (!intr.tzValid(zone)) {
+            throw IllegalArgumentException(f"unknown time zone \"{zone}\"")
+        }
+        return intr.tzAbbreviation(zone, at.epochMillis())
+    }
+}

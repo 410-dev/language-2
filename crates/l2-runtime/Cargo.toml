@@ -5,6 +5,10 @@ edition.workspace = true
 description = "Shared runtime value model and builtins for language-2 (interpreter, VM, native)"
 
 [dependencies]
+libm = "0.2"
+regex = "1"
+regex-syntax = "0.8"
+fancy-regex = "0.19"
 sha1 = "0.10"
 sha2 = "0.10"
 sha3 = "0.10"
@@ -19,5 +23,5 @@ rsa = { version = "0.9", features = ["sha2", "pem"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rand_chacha = "0.3"
 getrandom = "0.2"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+jiff = "0.2"
 ureq = { version = "2", default-features = false, features = ["tls"] }

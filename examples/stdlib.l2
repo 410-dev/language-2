@@ -10,6 +10,18 @@ using io.*
 using crypto.*
 using data.collections.*
 using math.Random as Random
+using math.Math as Math
+using text.Regex as Regex
+using data.Json as Json
+
+class Point {
+    private json[encode, decode] Float64 x = 0.0
+    private json[encode, decode] Float64 y = 0.0
+    public Point() {}
+    public function Float64 distance() {
+        return x.hypotenuse(y)
+    }
+}
 
 function void main() {
     // arrays are growable lists with higher-order methods
@@ -52,6 +64,14 @@ function void main() {
         pq.add(r.nextInt(100))
     }
     stdio.println(f"smallest first: {pq}")
+
+    // math, regular expressions and JSON objects
+    stdio.println(f"sqrt 2 = {2.0.squareRoot():.6f}, sin 30deg = {30.0.toRadians().sine():.3f}, log2 1024 = {Math.logarithmBase2(1024.0)}")
+    Regex email = new Regex(r"(?<user>[\w.]+)@(?<host>[\w.]+)")
+    Match? m = email.find("contact: ann@example.com")
+    stdio.println(f"user {m!.group("user")} at {m!.group("host")}, code {String.random(r"[A-Z]{3}-\d{3}").length()} chars")
+    Point pt = Json.decode[Point]("{\"x\": 3, \"y\": 4}")
+    stdio.println(f"{pt.toJson()} is {pt.distance()} from the origin")
 
     // one task, a command per operating system
     PlatformTask hello = new PlatformTask()

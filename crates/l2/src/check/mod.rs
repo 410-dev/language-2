@@ -125,6 +125,16 @@ pub struct ClassMeta<'a> {
     pub statics: HashMap<String, StaticMeta>,
     pub own_field_start: usize,
     pub generic_decls: Vec<&'a ast::FuncDecl>,
+    /// `json[...]` fields including inherited ones (spec 10.8).
+    pub json_fields: Vec<JsonField>,
+}
+
+#[derive(Clone, Debug)]
+pub struct JsonField {
+    pub field: u32,
+    pub key: String,
+    pub encode: bool,
+    pub decode: bool,
 }
 
 pub struct IfaceMeta<'a> {
@@ -143,6 +153,10 @@ pub enum JobKind<'a> {
     Getter(u32),
     Setter(u32, bool),
     Delegate(FuncId),
+    /// `__toJson()`: the `json[encode]` fields as a Dictionary.
+    JsonEncode,
+    /// `__fromJson(value)`: a new object (made with this constructor) from a JSON object.
+    JsonDecode(FuncId),
 }
 
 pub struct Job<'a> {
@@ -1195,6 +1209,8 @@ impl<'a> Checker<'a> {
             equals_fn: None,
             to_string_fn: None,
             compare_fn: None,
+            to_json_fn: None,
+            from_json_fn: None,
             needs_drop: false,
             is_throwable: name == "Throwable",
         });
@@ -1212,6 +1228,7 @@ impl<'a> Checker<'a> {
             statics: HashMap::new(),
             own_field_start: 0,
             generic_decls: Vec::new(),
+            json_fields: Vec::new(),
         });
         self.class_inst.insert(key, id);
         self.build_class(id, decl, module, subst);
@@ -1412,6 +1429,33 @@ impl<'a> Checker<'a> {
                 self.queue.push_back(Job { func: fid, kind: JobKind::Func(m), module, class: Some(id), iface: None, subst: subst.clone(), is_static });
             }
         }
+        // json[...] fields: inherited ones first
+        let mut json_fields = parent.map(|p| self.cmeta[p as usize].json_fields.clone()).unwrap_or_default();
+        for f in &decl.fields {
+            let Some(js) = &f.mods.json else { continue };
+            if f.mods.is_static {
+                self.err(js.span, "json[...] applies to instance fields, not static fields");
+                continue;
+            }
+            if !js.encode && !js.decode {
+                self.err(js.span, "json[...] needs encode, decode or both (e.g. json[encode, decode])");
+                continue;
+            }
+            let Some(idx) = fields.iter().position(|x| x.name == f.name) else { continue };
+            if js.decode && f.mods.immutable {
+                self.err(js.span, format!("Immutable field '{}' cannot be json[decode] (decoding assigns it after construction)", f.name));
+            }
+            if matches!(fields[idx].ty, Type::Func(_, _)) {
+                self.err(js.span, format!("field '{}' holds a function, which has no JSON form", f.name));
+            }
+            let key = js.name.clone().unwrap_or_else(|| f.name.clone());
+            if json_fields.iter().any(|j: &JsonField| j.key == key) {
+                self.err(js.span, format!("JSON name \"{}\" is used by two fields of class '{}'", key, cname));
+            }
+            json_fields.push(JsonField { field: idx as u32, key, encode: js.encode, decode: js.decode });
+        }
+        self.cmeta[id as usize].json_fields = json_fields.clone();
+
         // generated accessors
         for (fi, f) in decl.fields.iter().enumerate() {
             let _ = fi;
@@ -1636,6 +1680,26 @@ impl<'a> Checker<'a> {
             let fid = self.new_func(format!("{}.<init>", cname), FuncKind::Ctor, sig, wrap, Some(id), decl.span);
             ctors.push((fid, vec![], vec![], Access::Public, vec![]));
             self.queue.push_back(Job { func: fid, kind: JobKind::Ctor(None), module, class: Some(id), iface: None, subst: subst.clone(), is_static: false });
+        }
+        // JSON encoding / decoding functions (spec 10.8)
+        if json_fields.iter().any(|j| j.encode) {
+            let ret = Type::Dict(Box::new(Type::Str), Box::new(Type::Dyn));
+            let sig = FuncSig { name: "__toJson".into(), params: vec![], param_names: vec![], ret, throws: vec![] };
+            let fid = self.new_func(format!("{}.__toJson", cname), FuncKind::Method, sig, wrap, Some(id), decl.span);
+            self.classes[id as usize].to_json_fn = Some(fid);
+            self.queue.push_back(Job { func: fid, kind: JobKind::JsonEncode, module, class: Some(id), iface: None, subst: subst.clone(), is_static: false });
+        }
+        if json_fields.iter().any(|j| j.decode) {
+            match ctors.iter().find(|c| c.1.is_empty()) {
+                Some((ctor, ..)) => {
+                    let ctor = *ctor;
+                    let sig = FuncSig { name: "__fromJson".into(), params: vec![Type::Dyn], param_names: vec!["value".into()], ret: Type::Class(id), throws: vec![] };
+                    let fid = self.new_func(format!("{}.__fromJson", cname), FuncKind::Method, sig, wrap, Some(id), decl.span);
+                    self.classes[id as usize].from_json_fn = Some(fid);
+                    self.queue.push_back(Job { func: fid, kind: JobKind::JsonDecode(ctor), module, class: Some(id), iface: None, subst: subst.clone(), is_static: true });
+                }
+                None => self.err(decl.span, format!("class '{}' has json[decode] fields but no constructor without parameters (decoding creates the object with it)", cname)),
+            }
         }
         self.cmeta[id as usize].ctors = ctors;
         self.cmeta[id as usize].state = 2;

@@ -1,0 +1,6 @@
+// error: JSON name "x" is used by two fields
+class A {
+    private json["x", encode] Int64 a = 0
+    private json["x", encode] Int64 b = 0
+}
+function void main() {}

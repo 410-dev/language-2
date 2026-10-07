@@ -1,0 +1,71 @@
+// Regular expressions, raw strings and pattern-based random strings (spec 3.3, 11.2, 14.15).
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using text.Regex as Regex
+
+function void main() {
+    // raw strings keep backslashes; r#"..."# may contain quotes
+    stdio.println(r"C:\temp\new" + " " + r#"say "hi""#)
+
+    Regex date = new Regex(r"(?<year>\d{4})-(?<month>\d{2})-(\d{2})")
+    String text = "준비 2026-10-07, 마감 2027-01-31."
+    Match? m = date.find(text)
+    stdio.println(f"{m!} {m!.group("year")} {m!.group(3)} {m!.groups()} {m!.start()}..{m!.end()}")
+    stdio.println(date.findAll(text).map((x) -> x.text()))
+    stdio.println(date.find(text, 12)!.text())
+    stdio.println(date.find("no dates") == null)
+    stdio.println(date.replace(text, "$month/$3/$year"))
+    stdio.println(date.replaceFirst(text, "[date]"))
+    stdio.println(date.replace(text, (&Match d) -> f"<{d.group("year")!.substring(2)}>"))
+    stdio.println(f"{date.test(text)} {date.matchesAll("2026-10-07")} {date.matchesAll(text)} {date.groupCount()}")
+
+    Regex words = new Regex(r"\s*[,;]\s*")
+    stdio.println(words.split("a , b;c ,d"))
+    stdio.println(words.split("a , b;c ,d", 2))
+    Regex ci = new Regex("hello", "i")
+    stdio.println(f"{ci.test("Say HELLO")} {ci}")
+    Regex lines = new Regex(r"^\w+", "m")
+    stdio.println(lines.findAll("one two\nthree four").map((x) -> x.text()))
+
+    // the backtracking engine: back-references and look-around
+    Regex twice = Regex.fancy(r"\b(\w+) \1\b")
+    stdio.println(twice.find("this is is a test")!.text())
+    stdio.println(Regex.fancy(r"\d+(?= dollars)").find("cost 25 dollars")!.text())
+    stdio.println(Regex.escape("1+1=2?"))
+    try {
+        Regex bad = new Regex(r"(\w+) \1".clone())
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage().contains("Regex.fancy"))
+    }
+
+    // String methods
+    stdio.println(f"{"2026-10-07".matches(r"\d{4}-\d{2}-\d{2}")} {"x2026".matches(r"\d+")} {"x2026".containsMatch(r"\d+")}")
+    stdio.println("a1b22c333".replaceRegex(r"\d+", "#"))
+    stdio.println("a1b22c333".splitRegex(r"\d+"))
+    stdio.println("a1b22c333".findAll(r"\d+"))
+
+    // random strings matching a pattern
+    String code = String.random(r"[A-Z]{3}-\d{4}")
+    stdio.println(f"{code.length()} {code.matches(r"[A-Z]{3}-\d{4}")}")
+    String id = String.random("[a-f0-9]", 10, 10)
+    stdio.println(f"{id.length()} {id.matches("[a-f0-9]+")}")
+    String any = String.random(r"(ab|cde)+x?")
+    stdio.println(any.matches(r"(ab|cde)+x?"))
+    String token = "12345678"
+    token.randomize("[A-Za-z0-9]")
+    stdio.println(f"{token.length()} {token.matches("[A-Za-z0-9]{8}")}")
+    String phone = "###-####"
+    phone.randomize(r"\d{3}-\d{4}")
+    stdio.println(phone.matches(r"\d{3}-\d{4}"))
+    String korean = "abc"
+    korean.randomize("[가-힣]")
+    stdio.println(f"{korean.length()} {korean.matches("[가-힣]+")}")
+    try {
+        String two = "ab"
+        two.randomize(r"\d{3}")
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+}

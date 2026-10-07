@@ -1,0 +1,6 @@
+// error: has json[decode] fields but no constructor without parameters
+class A {
+    private json[decode] Int64 a = 0
+    public A(Int64 a) { this.a = a }
+}
+function void main() {}

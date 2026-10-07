@@ -261,6 +261,25 @@ impl<'a> Checker<'a> {
                         let code = HExpr::new(H::Lit(Lit::Str(rt_type(&t).encode())), Type::Str, span);
                         b(Builtin::StrParse, vec![recv, code], t)
                     }
+                    // regular expressions (spec 11.3, 14.15)
+                    "matches" | "containsMatch" | "replaceRegex" | "splitRegex" | "findAll" => {
+                        use l2_runtime::sys::SysOp;
+                        if let Some(a) = args.first() {
+                            self.check_regex_literal(&a.value, false);
+                        }
+                        let (op, n, ret) = match name {
+                            "matches" => (SysOp::strMatches, 1, Type::Bool),
+                            "containsMatch" => (SysOp::strContainsMatch, 1, Type::Bool),
+                            "replaceRegex" => (SysOp::strReplaceRegex, 2, Type::Str),
+                            "splitRegex" => (SysOp::strSplitRegex, 1, Type::Array(Box::new(Type::Str))),
+                            _ => (SysOp::strFindAllRegex, 1, Type::Array(Box::new(Type::Str))),
+                        };
+                        let ps: Vec<P> = (0..n).map(|_| P::Borrow(Type::Str)).collect();
+                        let a = self.bargs(args, &ps, n, &what, span)?;
+                        let mut all = vec![HExpr::new(H::Lit(Lit::Int(op.code() as i128)), Type::int32(), span), recv];
+                        all.extend(a);
+                        b(Builtin::Sys, all, ret)
+                    }
                     // text to Bytes (spec 14.5)
                     "encode" => {
                         let a = self.bargs(args, &[P::Borrow(Type::Str)], 0, &what, span)?;
@@ -273,8 +292,12 @@ impl<'a> Checker<'a> {
                         let bi = if name == "append" { Builtin::StrAppend } else { Builtin::StrPrepend };
                         HExpr::new(H::BuiltinMut(bi, Box::new(place), a), Type::Void, span)
                     }
+                    // replaced by a random string matching the pattern, of the same length
                     "randomize" => {
-                        let a = self.bargs(args, &[P::Borrow(Type::Str), P::Val(Type::int64()), P::Val(Type::int64())], 3, &what, span)?;
+                        if let Some(a) = args.first() {
+                            self.check_generator_pattern(&a.value);
+                        }
+                        let a = self.bargs(args, &[P::Borrow(Type::Str)], 1, &what, span)?;
                         let place = self.mut_place(obj, name, span)?;
                         HExpr::new(H::BuiltinMut(Builtin::StrRandomize, Box::new(place), a), Type::Void, span)
                     }
@@ -325,6 +348,38 @@ impl<'a> Checker<'a> {
                         let a = self.bargs(args, &[P::Val(rty.clone()), P::Val(rty.clone())], 2, &what, span)?;
                         let place = self.mut_place(obj, name, span)?;
                         HExpr::new(H::BuiltinMut(Builtin::NumRandomize, Box::new(place), a), Type::Void, span)
+                    }
+                    // mathematical functions (spec 12.3)
+                    n if l2_runtime::math::MathOp::ALL.iter().any(|o| o.name().trim_end_matches('_') == n) => {
+                        use l2_runtime::math::{Kind, MathOp};
+                        let Some(op) = MathOp::by_name(n, args.len()) else {
+                            let arities: Vec<String> = MathOp::ALL.iter().filter(|o| o.name().trim_end_matches('_') == n).map(|o| o.arity().to_string()).collect();
+                            self.err(span, format!("{} takes {} argument(s) but {} were given", what, arities.join(" or "), args.len()));
+                            return Some(self.none(span));
+                        };
+                        let (pty, ret) = match op.kind() {
+                            Kind::Float => {
+                                let r = if matches!(rty, Type::Float(_)) { rty.clone() } else { Type::Float(FloatTy::F64) };
+                                (Type::Float(FloatTy::F64), r)
+                            }
+                            Kind::Same => (rty.clone(), rty.clone()),
+                            Kind::Test => (Type::Float(FloatTy::F64), Type::Bool),
+                            Kind::Integer => {
+                                if !matches!(rty, Type::Int(_) | Type::Big) {
+                                    let tn = self.tname(&rty);
+                                    self.err(span, format!("{} is defined for integer types only, not {}", n, tn));
+                                    return Some(self.none(span));
+                                }
+                                (rty.clone(), rty.clone())
+                            }
+                        };
+                        let ps: Vec<P> = (0..op.arity()).map(|_| P::Val(pty.clone())).collect();
+                        let a = self.bargs(args, &ps, op.arity(), &what, span)?;
+                        let wrap = HExpr::new(H::Lit(Lit::Bool(self.cur_ref().wrap)), Type::Bool, span);
+                        let code = HExpr::new(H::Lit(Lit::Int(op.code() as i128)), Type::int32(), span);
+                        let mut all = vec![recv, wrap, code];
+                        all.extend(a);
+                        b(Builtin::NumMath, all, ret)
                     }
                     "compareTo" => {
                         let a = self.bargs(args, &[P::Val(rty.clone())], 1, &what, span)?;
@@ -603,7 +658,14 @@ impl<'a> Checker<'a> {
                 return HExpr::new(H::Cast(Box::new(v), wrap), ty, span);
             }
             "random" if ty == Type::Str => {
-                let Some(a) = self.bargs(args, &[P::Borrow(Type::Str), P::Val(Type::int64()), P::Val(Type::int64())], 3, &what, span) else {
+                if args.len() == 2 {
+                    self.err(span, "String.random takes (pattern) or (pattern, minLength, maxLength)");
+                    return self.none(span);
+                }
+                if let Some(a) = args.first() {
+                    self.check_generator_pattern(&a.value);
+                }
+                let Some(a) = self.bargs(args, &[P::Borrow(Type::Str), P::Val(Type::int64()), P::Val(Type::int64())], 1, &what, span) else {
                     return self.none(span);
                 };
                 return HExpr::new(H::Builtin(Builtin::StrRandom, a), Type::Str, span);
@@ -612,6 +674,24 @@ impl<'a> Checker<'a> {
         }
         self.err(span, format!("'{}' has no static method '{}'", tn, name));
         self.none(span)
+    }
+
+    /// Compile-time check of a literal pattern for String.random / randomize.
+    fn check_generator_pattern(&mut self, e: &ast::Expr) {
+        if let A::Str(p) = &e.kind {
+            if let Err(msg) = l2_runtime::regex_gen::check(p) {
+                self.err(e.span, msg);
+            }
+        }
+    }
+
+    /// Compile-time check of a literal regular expression.
+    pub fn check_regex_literal(&mut self, e: &ast::Expr, fancy: bool) {
+        if let A::Str(p) = &e.kind {
+            if let Err(msg) = l2_runtime::sys::regex::check_pattern(p, "", fancy) {
+                self.err(e.span, msg);
+            }
+        }
     }
 
     pub fn stdio_call(&mut self, name: &str, args: &'a [ast::Arg], span: Span) -> HExpr {

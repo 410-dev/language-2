@@ -1,0 +1,127 @@
+@using sdk 1
+
+// math.Math: mathematical constants and functions (spec 14.14).
+//
+//     using math.Math as Math
+//     Float64 r = Math.squareRoot(2.0)              // same as 2.0.squareRoot()
+//     Float64 angle = Math.arcTangent2(1.0, 1.0)    // pi / 4
+//
+// Every function here is also a method of the numbers themselves (spec 12.3), e.g.
+// `x.sine()`, `x.logarithm(2.0)`; the methods keep Float16 / Float32 receivers in their type.
+// Results are identical on every platform and backend.
+
+public class Math {
+    // ratio of a circle's circumference to its diameter
+    public static Immutable Float64 PI = 3.141592653589793
+    // base of the natural logarithm
+    public static Immutable Float64 E = 2.718281828459045
+    // 2 * PI, one full turn in radians
+    public static Immutable Float64 TAU = 6.283185307179586
+    public static Immutable Float64 INFINITY = 1.0 / 0.0
+    public static Immutable Float64 NOT_A_NUMBER = 0.0 / 0.0
+
+    // ------------------------------------------------------------------ powers and roots
+    public static function Float64 squareRoot(Float64 x) {
+        return x.squareRoot()
+    }
+
+    public static function Float64 cubeRoot(Float64 x) {
+        return x.cubeRoot()
+    }
+
+    // `base` raised to `exponent`
+    public static function Float64 powerOf(Float64 base, Float64 exponent) {
+        return base.powerOf(exponent)
+    }
+
+    // e raised to `x`
+    public static function Float64 exponential(Float64 x) {
+        return x.exponential()
+    }
+
+    // sqrt(x^2 + y^2) without intermediate overflow
+    public static function Float64 hypotenuse(Float64 x, Float64 y) {
+        return x.hypotenuse(y)
+    }
+
+    // ------------------------------------------------------------------ logarithms
+    // natural logarithm (base e)
+    public static function Float64 logarithm(Float64 x) {
+        return x.logarithm()
+    }
+
+    public static function Float64 logarithm(Float64 x, Float64 base) {
+        return x.logarithm(base)
+    }
+
+    public static function Float64 logarithmBase2(Float64 x) {
+        return x.logarithmBase2()
+    }
+
+    public static function Float64 logarithmBase10(Float64 x) {
+        return x.logarithmBase10()
+    }
+
+    // ------------------------------------------------------------------ trigonometry (radians)
+    public static function Float64 sine(Float64 x) {
+        return x.sine()
+    }
+
+    public static function Float64 cosine(Float64 x) {
+        return x.cosine()
+    }
+
+    public static function Float64 tangent(Float64 x) {
+        return x.tangent()
+    }
+
+    public static function Float64 arcSine(Float64 x) {
+        return x.arcSine()
+    }
+
+    public static function Float64 arcCosine(Float64 x) {
+        return x.arcCosine()
+    }
+
+    public static function Float64 arcTangent(Float64 x) {
+        return x.arcTangent()
+    }
+
+    // the angle of the point (x, y) from the positive x axis, in -PI..PI
+    public static function Float64 arcTangent2(Float64 y, Float64 x) {
+        return y.arcTangent2(x)
+    }
+
+    public static function Float64 hyperbolicSine(Float64 x) {
+        return x.hyperbolicSine()
+    }
+
+    public static function Float64 hyperbolicCosine(Float64 x) {
+        return x.hyperbolicCosine()
+    }
+
+    public static function Float64 hyperbolicTangent(Float64 x) {
+        return x.hyperbolicTangent()
+    }
+
+    public static function Float64 toRadians(Float64 degrees) {
+        return degrees.toRadians()
+    }
+
+    public static function Float64 toDegrees(Float64 radians) {
+        return radians.toDegrees()
+    }
+
+    // ------------------------------------------------------------------ comparisons
+    public static function Float64 minimum(Float64 a, Float64 b) {
+        return a < b ? a : b
+    }
+
+    public static function Float64 maximum(Float64 a, Float64 b) {
+        return a > b ? a : b
+    }
+
+    public static function Float64 absolute(Float64 x) {
+        return x.abs()
+    }
+}
