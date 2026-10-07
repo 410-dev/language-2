@@ -81,6 +81,10 @@ impl<'p> Host for Interp<'p> {
         let p = self.p;
         default_object_string(p, o, self)
     }
+    fn obj_default_string(&mut self, o: &Rc<Object>) -> Result<String, Exc> {
+        let p = self.p;
+        default_object_string(p, o, self)
+    }
     fn obj_equals(&mut self, a: &Rc<Object>, b: &Rc<Object>) -> Result<bool, Exc> {
         if let Some(f) = self.p.classes[a.class as usize].equals_fn {
             let v = self.call(f, vec![Value::Object(a.clone()), Value::Object(b.clone())])?;

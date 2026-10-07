@@ -1,0 +1,48 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+using stdio as stdio
+
+// spec 11.1 format specifications, 12.2 round / ceil / floor / abs
+
+function void main() {
+    Float64 x = 123.456
+    stdio.println(f"{x.round()} {x.round(1)} {x.round(2)} {x.round(2, 1)} {x.ceil(2, 1)} {x.floor(2, 1)}")
+    stdio.println(f"{(-x).round(2, 1)} {(-x).ceil(2, 1)} {(-x).floor()} {x.round(0, 2)} {x.round(-1)}")
+    stdio.println(f"{2.675.round(2)} {2.5.round()} {(-2.5).round()} {0.1.ceil(1)} {1234.5.round(-2)}")
+    Float32 f = 1.25
+    stdio.println(f"{f.round(1)} {f.ceil()} {f.floor(1)}")
+    Int32 n = 1234
+    stdio.println(f"{n.round(-2)} {n.round(2, 0)} {n.ceil(1, 5)} {n.floor(-3)} {(-1250).round(-2)} {(-7).abs()}")
+    IntLarge big = 123456789012345678901234567890
+    stdio.println(big.round(-10))
+    try {
+        Int8 i = 127
+        stdio.println(i.round(-1))
+    } catch (ArithmeticException e) {
+        stdio.println(e.getMessage())
+    }
+    try {
+        stdio.println(x.round(-1, 2))
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+
+    Float64 pi = 3.14159265
+    stdio.println(f"[{pi:.2f}] [{pi:10.3f}] [{pi:<10.1f}] [{pi:^10.2f}] [{pi:+.1e}] [{0.256:.1%}] [{pi:g}] [{1e20:g}]")
+    stdio.println(f"[{1234567.891:,.2f}] [{1234567:_}] [{255:#x}] [{255:#X}] [{255:08b}] [{8:o}] [{-42:=+8}] [{42:*^9}] [{65:c}]")
+    stdio.println(f"[{"hi":>5}] [{"hi":-<6}] [{"hello":.3}] [{true:>6}] [{true:d}] [{-0.0001:z.2f}] [{2.0:.3}] [{x:e}]")
+    Int64 width = 8
+    Int64 prec = 2
+    Boolean flag = true
+    stdio.println(f"[{pi:{width}.{prec}f}] {x=} {pi = :.3f} {"q"!r:>5} {x!s:>9} {flag ? 1 : 2} {{literal}} {x:.1f}%")
+    Int64[] arr = [1, 2]
+    stdio.println(f"[{arr:>8}] [{arr!r}] [{"x" + "y":^6}]")
+    stdio.println("Total: %amount:.2f% for %name:>5% (%n:03d%)".format(19.5, "Kim", 7))
+    String t = "value %v:08.3f% and %w%"
+    stdio.println(t.format(3.14159, "w"))
+    try {
+        stdio.println("%v:d%".formatWithInjection(1.5))
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+}

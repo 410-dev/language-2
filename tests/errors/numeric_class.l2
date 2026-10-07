@@ -1,0 +1,5 @@
+// error: Numeric is satisfied only by the built-in numeric types
+public class Money implements Numeric {
+}
+function void main() {
+}

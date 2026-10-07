@@ -1,0 +1,24 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+using stdio as stdio
+using math.linear.*
+using geo.shapes.*
+using geo.shapes as shapes
+using math.linear.* as linear
+using geo.shapes.Circle as Ring
+
+// spec 14.1 / 14.3: package imports, aliases, and fully qualified names for clashing names
+
+function void main() {
+    math.linear.Matrix m = new math.linear.Matrix(2, 2)
+    geo.shapes.Matrix g = new geo.shapes.Matrix()
+    shapes.Matrix g2 = shapes.Matrix()
+    linear.Matrix id = linear.Matrix.identity(2)
+    stdio.println(f"{m.rows()} {g} {g2} {id[1, 1]}")
+    Circle c = new Circle(2.0)
+    Ring r = new Ring(1.0)
+    stdio.println(f"{c.area()} {r.r()} {new shapes.Circle(3.0).area()} {Ring.describe(&r)}")
+    Vector v = new Vector(3)
+    linear.Vector w = Vector.ones(3)
+    stdio.println(f"{v + w} {math.linear.Vector.zeros(2)}")
+}

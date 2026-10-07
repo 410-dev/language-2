@@ -1,0 +1,6 @@
+// error: '<' cannot be overloaded
+public class Point {
+    public function Boolean operator<(&Point o) { return true }
+}
+function void main() {
+}

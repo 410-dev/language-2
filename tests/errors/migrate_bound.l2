@@ -1,0 +1,6 @@
+// error: type argument String of 'migrate' does not satisfy the bound 'U extends Numeric'
+using math.linear.Vector as Vector
+function void main() {
+    Vector v = new Vector(2)
+    STVariable w = v.migrate[String]()
+}

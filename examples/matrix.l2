@@ -1,0 +1,41 @@
+// Linear algebra with the standard library's math.linear package.
+@using sdk 1
+@runtime compiler interpreter bytecode
+
+using stdio as stdio
+using math.linear.Matrix as Matrix
+using math.linear.Vector as Vector
+
+function void main() {
+    Matrix a = new Matrix([[1, 2, 3], [4, 5, 6]])
+    Matrix b = a.transpose()
+    stdio.println(f"A =\n{a}\nA^T =\n{b}")
+
+    Matrix c = a * b
+    stdio.println(f"A * A^T =\n{c}")
+    stdio.println(f"det(A * A^T) = {c.determinant():.3f}, trace = {c.trace()}")
+    stdio.println(f"(A * A^T)^-1 =\n{c.inverse().round(4)}")
+
+    Matrix i2 = Matrix.identity(2)
+    stdio.println(f"C * I == C: {c * i2 == c}")
+    stdio.println(f"C + 2I =\n{c + 2.0 * i2}")
+
+    Vector x = c.solve(&new Vector([1.0, 2.0]))
+    stdio.println(f"solve C x = (1, 2): x = {x.round(5)}, check {(c * x).round(9)}")
+
+    // element-wise operations with lambdas
+    Matrix scaled = a.map((v) -> v / 3.0)
+    stdio.println(f"A / 3 rounded:\n{scaled.round(2)}")
+    scaled.forEachRow((Int64 i, Vector row) -> row * (i + 1).castTo(Float64))
+    stdio.println(f"rows scaled by 1, 2:\n{scaled.floor(1)}")
+
+    // integer matrices and element type migration
+    Matrix[Int32] counts = c.migrate[Int32]()
+    stdio.println(f"C as Int32, squared:\n{counts ** 2}")
+
+    try {
+        a * a
+    } catch (IllegalArgumentException e) {
+        stdio.println(f"error: {e.getMessage()}")
+    }
+}

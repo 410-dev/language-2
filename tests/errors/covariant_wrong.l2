@@ -1,0 +1,9 @@
+// error: method 'make' overrides a method with a different return type
+public class A {
+    public function A make() { return A() }
+}
+public class B extends A {
+    public function String make() { return "" }
+}
+function void main() {
+}

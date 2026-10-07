@@ -1,0 +1,4 @@
+// error: unknown format code 'f' for a value of type String
+function void main() {
+    String s = "%x:.2f%".format("text")
+}

@@ -1,0 +1,6 @@
+// error: operator '+' is not defined for Point and Point (declare 'operator+' to overload it)
+public class Point {
+}
+function void main() {
+    Point p = Point() + Point()
+}

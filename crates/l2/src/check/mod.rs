@@ -3,6 +3,7 @@
 
 mod expr;
 mod members;
+mod oper;
 mod stmt;
 
 use crate::ast::{self, Access, DirValue, Item, TypeExpr};
@@ -15,10 +16,21 @@ use std::rc::Rc;
 
 pub type Subst = HashMap<String, Type>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Import {
     Stdio,
     Module(usize),
+    /// A package alias (`using math.linear as linear`): `linear.Matrix` names its types.
+    Package(String),
+    /// Bulk numeric kernels; only available to the standard library.
+    Intrinsics,
+}
+
+/// A resolved type name: fully qualified name of a class or interface declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TypeRef {
+    Class(String),
+    Iface(String),
 }
 
 #[derive(Clone)]
@@ -32,10 +44,20 @@ pub struct FnRef<'a> {
 pub struct ModuleInfo<'a> {
     pub file: u32,
     pub name: String,
+    /// Package (directory) of the module; `""` for the default package and the prelude.
+    pub package: String,
     pub funcs: HashMap<String, Vec<FnRef<'a>>>,
     pub imports: HashMap<String, Import>,
+    /// Explicitly imported or aliased types: name -> fully qualified name.
+    pub type_aliases: HashMap<String, String>,
+    /// Packages whose types are visible by simple name (`using pkg.*`, `using pkg`, and the
+    /// packages of imported modules).
+    pub visible_packages: Vec<String>,
+    /// Simple names of the types declared in this module.
+    pub declared: HashSet<String>,
     pub wrap: bool,
     pub is_prelude: bool,
+    pub is_stdlib: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -219,6 +241,9 @@ pub struct Checker<'a> {
     pub entry_module: usize,
     pub lambda_counter: u32,
     pub prelude_module: usize,
+    /// Classes whose superclass was still being built when they were instantiated:
+    /// (class, superclass). They are built once the superclass is complete.
+    pub deferred: Vec<(ClassId, ClassId)>,
 }
 
 pub struct CheckOutput {
@@ -226,8 +251,9 @@ pub struct CheckOutput {
     pub warnings: Vec<Diag>,
 }
 
-/// Type-checks a whole program. `files[0]` must be the prelude, `files[entry]` the entry file.
-pub fn check_program(files: &[ast::FileAst], module_names: &[String], entry: usize) -> Result<CheckOutput, Vec<Diag>> {
+/// Type-checks a whole program. `files[0]` must be the prelude, `files[entry]` the entry file;
+/// `stdlib[i]` tells whether file `i` belongs to the standard library.
+pub fn check_program(files: &[ast::FileAst], module_names: &[String], entry: usize, stdlib: &[bool]) -> Result<CheckOutput, Vec<Diag>> {
     let mut c = Checker {
         files,
         diags: Vec::new(),
@@ -255,8 +281,9 @@ pub fn check_program(files: &[ast::FileAst], module_names: &[String], entry: usi
         entry_module: entry,
         lambda_counter: 0,
         prelude_module: 0,
+        deferred: Vec::new(),
     };
-    c.run(module_names);
+    c.run(module_names, entry, stdlib);
     let errors: Vec<Diag> = c.diags.drain(..).collect();
     if !errors.is_empty() {
         return Err(errors);
@@ -318,49 +345,57 @@ impl<'a> Checker<'a> {
     }
 
     // ------------------------------------------------------------------ driver
-    fn run(&mut self, module_names: &[String]) {
+    fn run(&mut self, module_names: &[String], entry: usize, stdlib: &[bool]) {
         // modules and directives
         for (i, f) in self.files.iter().enumerate() {
             let wrap = self.file_policy(f);
+            let name = module_names.get(i).cloned().unwrap_or_default();
+            let package = if i == 0 || i == entry { String::new() } else { name.rsplit_once('.').map(|(p, _)| p.to_string()).unwrap_or_default() };
             self.modules.push(ModuleInfo {
                 file: f.file,
-                name: module_names.get(i).cloned().unwrap_or_default(),
+                name,
+                package,
                 funcs: HashMap::new(),
                 imports: HashMap::new(),
+                type_aliases: HashMap::new(),
+                visible_packages: Vec::new(),
+                declared: HashSet::new(),
                 wrap,
                 is_prelude: i == 0,
+                is_stdlib: stdlib.get(i).copied().unwrap_or(false),
             });
         }
         self.read_config();
-        // collect declarations
+        // collect declarations under their fully qualified names (spec 14.3)
         for (mi, f) in self.files.iter().enumerate() {
             for item in &f.items {
-                match item {
-                    Item::Class(c) => {
-                        if self.class_decls.contains_key(&c.name) || self.iface_decls.contains_key(&c.name) {
-                            self.err(c.span, format!("duplicate type name '{}'", c.name));
-                            continue;
-                        }
-                        if is_builtin_type_name(&c.name) {
-                            self.err(c.span, format!("'{}' is a built-in type name", c.name));
-                            continue;
-                        }
-                        self.class_decls.insert(c.name.clone(), (mi, c));
+                let (name, span) = match item {
+                    Item::Class(c) => (&c.name, c.span),
+                    Item::Interface(d) => (&d.name, d.span),
+                    _ => continue,
+                };
+                let fqn = qualify(&self.modules[mi].package, name);
+                if self.class_decls.contains_key(&fqn) || self.iface_decls.contains_key(&fqn) {
+                    self.err(span, format!("duplicate type name '{}'", fqn));
+                    continue;
+                }
+                if let Item::Class(c) = item {
+                    if is_builtin_type_name(&c.name) {
+                        self.err(c.span, format!("'{}' is a built-in type name", c.name));
+                        continue;
                     }
-                    Item::Interface(d) => {
-                        if self.class_decls.contains_key(&d.name) || self.iface_decls.contains_key(&d.name) {
-                            self.err(d.span, format!("duplicate type name '{}'", d.name));
-                            continue;
-                        }
-                        self.iface_decls.insert(d.name.clone(), (mi, d));
-                    }
-                    Item::Using { module, alias, span } => {
-                        let imp = self.resolve_import(module, *span);
-                        if let Some(imp) = imp {
-                            self.modules[mi].imports.insert(alias.clone(), imp);
-                        }
-                    }
-                    Item::Function(_) => {}
+                    self.class_decls.insert(fqn, (mi, c));
+                } else if let Item::Interface(d) = item {
+                    self.iface_decls.insert(fqn, (mi, d));
+                }
+                self.modules[mi].declared.insert(name.clone());
+            }
+        }
+        // imports (types must be known to resolve `using pkg.Type`)
+        for (mi, f) in self.files.iter().enumerate() {
+            for item in &f.items {
+                if let Item::Using(u) = item {
+                    self.bind_using(mi, u);
                 }
             }
         }
@@ -381,6 +416,7 @@ impl<'a> Checker<'a> {
         for (_, _, _, n) in cnames {
             self.instantiate_class(&n, Vec::new(), Span::default());
         }
+        self.report_deferred();
         // functions
         for (mi, f) in self.files.iter().enumerate() {
             for item in &f.items {
@@ -395,6 +431,16 @@ impl<'a> Checker<'a> {
     pub fn process_queue(&mut self) {
         while let Some(job) = self.queue.pop_front() {
             self.check_job(job);
+        }
+        self.report_deferred();
+    }
+
+    /// Classes still waiting for their superclass can only be part of an inheritance cycle.
+    fn report_deferred(&mut self) {
+        for (c, _) in std::mem::take(&mut self.deferred) {
+            let span = self.cmeta[c as usize].decl.map(|d| d.span).unwrap_or_default();
+            let n = self.classes[c as usize].name.clone();
+            self.err(span, format!("cyclic inheritance involving '{}'", n));
         }
     }
 
@@ -485,17 +531,169 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn resolve_import(&mut self, module: &str, span: Span) -> Option<Import> {
-        if module == "stdio" {
-            return Some(Import::Stdio);
+    fn module_named(&self, name: &str) -> Option<usize> {
+        self.modules.iter().position(|m| m.name == name && !m.is_prelude)
+    }
+
+    fn package_exists(&self, p: &str) -> bool {
+        !p.is_empty() && self.modules.iter().any(|m| !m.is_prelude && m.package == p)
+    }
+
+    pub fn type_exists(&self, fqn: &str) -> bool {
+        self.class_decls.contains_key(fqn) || self.iface_decls.contains_key(fqn)
+    }
+
+    fn add_type_alias(&mut self, mi: usize, alias: &str, fqn: String, span: Span) {
+        if self.modules[mi].declared.contains(alias) && qualify(&self.modules[mi].package, alias) != fqn {
+            self.err(span, format!("import '{}' conflicts with a type declared in this file; use 'as' to rename it", alias));
+            return;
         }
-        for (i, m) in self.modules.iter().enumerate() {
-            if m.name == module && !m.is_prelude {
-                return Some(Import::Module(i));
+        if let Some(old) = self.modules[mi].type_aliases.get(alias) {
+            if *old != fqn {
+                self.err(span, format!("'{}' is already imported as '{}'; use 'as' to rename one of them", alias, old));
+                return;
             }
         }
-        self.err(span, format!("unknown module '{}'", module));
-        None
+        self.modules[mi].type_aliases.insert(alias.to_string(), fqn);
+    }
+
+    /// Binds a `using` declaration in module `mi` (spec 14.1).
+    pub fn bind_using(&mut self, mi: usize, u: &ast::UsingDecl) {
+        let path = u.path.as_str();
+        let last = path.rsplit('.').next().unwrap_or(path).to_string();
+        if !u.wildcard && path == "stdio" {
+            self.modules[mi].imports.insert(u.alias.clone().unwrap_or(last), Import::Stdio);
+            return;
+        }
+        if !u.wildcard && path == "intrinsics" {
+            if !self.modules[mi].is_stdlib {
+                self.err(u.span, "module 'intrinsics' is internal to the standard library");
+                return;
+            }
+            self.modules[mi].imports.insert(u.alias.clone().unwrap_or(last), Import::Intrinsics);
+            return;
+        }
+        if u.wildcard {
+            if !self.package_exists(path) {
+                self.err(u.span, format!("unknown package '{}'", path));
+                return;
+            }
+            match &u.alias {
+                Some(a) => {
+                    self.modules[mi].imports.insert(a.clone(), Import::Package(path.to_string()));
+                }
+                None => self.modules[mi].visible_packages.push(path.to_string()),
+            }
+            return;
+        }
+        if let Some(m) = self.module_named(path) {
+            let alias = u.alias.clone().unwrap_or(last.clone());
+            self.modules[mi].imports.insert(alias.clone(), Import::Module(m));
+            let pkg = self.modules[m].package.clone();
+            if !self.modules[mi].visible_packages.contains(&pkg) {
+                self.modules[mi].visible_packages.push(pkg.clone());
+            }
+            // a module that declares a type of its own name: the alias also names the type
+            if self.modules[m].declared.contains(&last) {
+                self.add_type_alias(mi, &alias, qualify(&pkg, &last), u.span);
+            }
+            return;
+        }
+        if self.package_exists(path) {
+            match &u.alias {
+                Some(a) => {
+                    self.modules[mi].imports.insert(a.clone(), Import::Package(path.to_string()));
+                }
+                None => self.modules[mi].visible_packages.push(path.to_string()),
+            }
+            return;
+        }
+        if self.type_exists(path) {
+            let alias = u.alias.clone().unwrap_or(last);
+            self.add_type_alias(mi, &alias, path.to_string(), u.span);
+            return;
+        }
+        self.err(u.span, format!("unknown module, package or type '{}'", path));
+    }
+
+    /// Finds the declaration a type name refers to in module `mi` (spec 14.3). Returns the fully
+    /// qualified name, or an error message for ambiguous names.
+    pub fn find_type(&self, mi: usize, name: &str) -> Result<Option<String>, String> {
+        let m = &self.modules[mi];
+        if let Some((prefix, last)) = name.rsplit_once('.') {
+            if !prefix.contains('.') {
+                match m.imports.get(prefix) {
+                    Some(Import::Package(p)) => {
+                        let f = qualify(p, last);
+                        return Ok(if self.type_exists(&f) { Some(f) } else { None });
+                    }
+                    Some(Import::Module(x)) => {
+                        let f = qualify(&self.modules[*x].package, last);
+                        return Ok(if self.type_exists(&f) { Some(f) } else { None });
+                    }
+                    _ => {}
+                }
+            }
+            return Ok(if self.type_exists(name) { Some(name.to_string()) } else { None });
+        }
+        if let Some(f) = m.type_aliases.get(name) {
+            return Ok(Some(f.clone()));
+        }
+        let own = qualify(&m.package, name);
+        if self.type_exists(&own) {
+            return Ok(Some(own));
+        }
+        let mut found: Vec<String> = Vec::new();
+        for p in &m.visible_packages {
+            let f = qualify(p, name);
+            if self.type_exists(&f) && !found.contains(&f) {
+                found.push(f);
+            }
+        }
+        match found.len() {
+            1 => return Ok(found.pop()),
+            0 => {}
+            _ => {
+                return Err(format!("'{}' is ambiguous ({}); write the fully qualified name", name, found.join(", ")));
+            }
+        }
+        Ok(if self.type_exists(name) { Some(name.to_string()) } else { None })
+    }
+
+    /// Like [`find_type`], reporting ambiguity as an error.
+    pub fn lookup_type(&mut self, mi: usize, name: &str, span: Span) -> Option<TypeRef> {
+        match self.find_type(mi, name) {
+            Ok(Some(f)) => Some(if self.class_decls.contains_key(&f) { TypeRef::Class(f) } else { TypeRef::Iface(f) }),
+            Ok(None) => None,
+            Err(e) => {
+                self.err(span, e);
+                None
+            }
+        }
+    }
+
+    /// Fills omitted trailing type arguments from the declaration's defaults.
+    pub fn complete_targs(&mut self, fqn: &str, mut targs: Vec<Type>) -> Vec<Type> {
+        let Some(&(module, decl)) = self.class_decls.get(fqn) else { return targs };
+        if targs.len() >= decl.type_params.len() {
+            return targs;
+        }
+        let mut subst = Subst::new();
+        for (tp, t) in decl.type_params.iter().zip(targs.iter()) {
+            subst.insert(tp.name.clone(), t.clone());
+        }
+        for tp in &decl.type_params[targs.len()..] {
+            let Some(d) = &tp.default else { break };
+            let t = self.resolve_type(d, module, &subst);
+            subst.insert(tp.name.clone(), t.clone());
+            targs.push(t);
+        }
+        targs
+    }
+
+    /// Whether every type parameter of a generic class has a default.
+    pub fn all_defaults(&self, fqn: &str) -> bool {
+        self.class_decls.get(fqn).map(|(_, d)| d.type_params.iter().all(|t| t.default.is_some())).unwrap_or(false)
     }
 
     // ------------------------------------------------------------------ selectors and functions
@@ -616,9 +814,10 @@ impl<'a> Checker<'a> {
         let mut subst = Subst::new();
         for ((name, bound), t) in tparams.iter().zip(targs.iter()) {
             if let Some(b) = bound {
-                if !self.satisfies_bound(t, b, fr.module, span) {
-                    let tn = self.tname(t);
-                    self.err(span, format!("type argument {} does not satisfy the bound of {}", tn, name));
+                if !t.is_error() && !self.satisfies_bound(t, b, fr.module, span) {
+                    let (tn, bn) = (self.tname(t), bound_name(b));
+                    self.err(span, format!("type argument {} of '{}' does not satisfy the bound '{} extends {}'", tn, d.name, name, bn));
+                    return None;
                 }
             }
             subst.insert(name.clone(), t.clone());
@@ -653,9 +852,10 @@ impl<'a> Checker<'a> {
         let mut subst: Subst = (*self.cmeta[c as usize].subst).clone();
         for ((name, bound), t) in tparams.iter().zip(targs.iter()) {
             if let Some(b) = bound {
-                if !self.satisfies_bound(t, b, module, span) {
-                    let tn = self.tname(t);
-                    self.err(span, format!("type argument {} does not satisfy the bound of {}", tn, name));
+                if !t.is_error() && !self.satisfies_bound(t, b, module, span) {
+                    let (tn, bn) = (self.tname(t), bound_name(b));
+                    self.err(span, format!("type argument {} of '{}' does not satisfy the bound '{} extends {}'", tn, d.name, name, bn));
+                    return None;
                 }
             }
             subst.insert(name.clone(), t.clone());
@@ -678,6 +878,9 @@ impl<'a> Checker<'a> {
 
     pub fn satisfies_bound(&mut self, t: &Type, bound: &TypeExpr, module: usize, _span: Span) -> bool {
         if let TypeExpr::Named { name, args, .. } = bound {
+            if name == "Numeric" && args.is_empty() {
+                return t.is_numeric();
+            }
             if name == "Comparable" && args.is_empty() {
                 return match t {
                     Type::Int(_) | Type::Float(_) | Type::Big | Type::Str | Type::Bool => true,
@@ -802,20 +1005,25 @@ impl<'a> Checker<'a> {
                     _ => {}
                 }
                 let targs: Vec<Type> = args.iter().map(|a| self.resolve_type(a, module, subst)).collect();
-                if self.class_decls.contains_key(name) {
-                    return match self.instantiate_class(name, targs, *span) {
-                        Some(c) => Type::Class(c),
-                        None => Type::Error,
-                    };
-                }
-                if self.iface_decls.contains_key(name) {
-                    return match self.instantiate_iface(name, targs, *span) {
+                match self.lookup_type(module, name, *span) {
+                    Some(TypeRef::Class(f)) => {
+                        let targs = self.complete_targs(&f, targs);
+                        match self.instantiate_class(&f, targs, *span) {
+                            Some(c) => Type::Class(c),
+                            None => Type::Error,
+                        }
+                    }
+                    Some(TypeRef::Iface(f)) => match self.instantiate_iface(&f, targs, *span) {
                         Some(i) => Type::Iface(i),
                         None => Type::Error,
-                    };
+                    },
+                    None => {
+                        if self.find_type(module, name).is_ok() {
+                            self.err(*span, format!("unknown type '{}'", name));
+                        }
+                        Type::Error
+                    }
                 }
-                self.err(*span, format!("unknown type '{}'", name));
-                Type::Error
             }
         }
     }
@@ -845,9 +1053,9 @@ impl<'a> Checker<'a> {
         }
         let id = self.ifaces.len() as IfaceId;
         let display = if targs.is_empty() {
-            name.to_string()
+            decl.name.clone()
         } else {
-            format!("{}[{}]", name, targs.iter().map(|t| self.tname(t)).collect::<Vec<_>>().join(", "))
+            format!("{}[{}]", decl.name, targs.iter().map(|t| self.tname(t)).collect::<Vec<_>>().join(", "))
         };
         self.ifaces.push(IfaceInfo { name: display, parents: Vec::new() });
         let subst = Rc::new(subst);
@@ -944,20 +1152,25 @@ impl<'a> Checker<'a> {
             return None;
         }
         let mut subst = Subst::new();
+        let mut ok = true;
         for (tp, t) in decl.type_params.iter().zip(targs.iter()) {
             if let Some(b) = &tp.bound {
-                if !self.satisfies_bound(t, b, module, span) {
-                    let tn = self.tname(t);
-                    self.err(span, format!("type argument {} does not satisfy the bound of {}", tn, tp.name));
+                if !t.is_error() && !self.satisfies_bound(t, b, module, span) {
+                    let (tn, bn) = (self.tname(t), bound_name(b));
+                    self.err(span, format!("type argument {} of '{}' does not satisfy the bound '{} extends {}'", tn, decl.name, tp.name, bn));
+                    ok = false;
                 }
             }
             subst.insert(tp.name.clone(), t.clone());
         }
+        if !ok {
+            return None;
+        }
         let id = self.classes.len() as ClassId;
         let display = if targs.is_empty() {
-            name.to_string()
+            decl.name.clone()
         } else {
-            format!("{}[{}]", name, targs.iter().map(|t| self.tname(t)).collect::<Vec<_>>().join(", "))
+            format!("{}[{}]", decl.name, targs.iter().map(|t| self.tname(t)).collect::<Vec<_>>().join(", "))
         };
         self.classes.push(ClassInfo {
             name: display,
@@ -1000,10 +1213,22 @@ impl<'a> Checker<'a> {
         if let Some(p) = &decl.extends {
             match self.resolve_type(p, module, &subst) {
                 Type::Class(pc) => {
-                    if self.cmeta[pc as usize].state == 1 {
-                        self.err(decl.span, format!("cyclic inheritance involving '{}'", cname));
-                    } else {
-                        parent = Some(pc);
+                    match self.cmeta[pc as usize].state {
+                        _ if pc == id => {
+                            self.err(decl.span, format!("cyclic inheritance involving '{}'", cname));
+                        }
+                        1 => {
+                            // the superclass is still being built (its signatures mention this
+                            // class): finish this class once the superclass is complete
+                            self.cmeta[id as usize].state = 3;
+                            self.deferred.push((id, pc));
+                            return;
+                        }
+                        3 => {
+                            self.err(decl.span, format!("cyclic inheritance involving '{}'", cname));
+                            self.deferred.retain(|(c, _)| *c != pc);
+                        }
+                        _ => parent = Some(pc),
                     }
                 }
                 Type::Iface(_) => self.err(decl.span, "use 'implements' for interfaces"),
@@ -1032,6 +1257,9 @@ impl<'a> Checker<'a> {
             }
         }
         self.classes[id as usize].ifaces = ifaces.clone();
+        if ifaces.iter().any(|i| self.ifaces[*i as usize].name == "Numeric") {
+            self.err(decl.span, "Numeric is satisfied only by the built-in numeric types; classes cannot implement it");
+        }
         // fields
         let own_start = fields.len();
         self.cmeta[id as usize].own_field_start = own_start;
@@ -1113,8 +1341,11 @@ impl<'a> Checker<'a> {
             self.check_ret_type(&ret, m.span);
             let throws = self.resolve_throws(&m.throws, module, m.span);
             let is_static = m.mods.is_static;
-            if m.name == "drop" && params.is_empty() && !is_static {
-                // fine: Droppable implementation
+            if m.name.starts_with("operator") && m.name.len() > "operator".len() {
+                self.check_operator_decl(m, params.len(), &ret);
+            }
+            if m.name == "toString" && params.is_empty() && !is_static && ret != Type::Str && !ret.is_error() {
+                self.err(m.span, "toString() must return String (it is used for printing, concatenation and f-strings)");
             }
             if methods.iter().any(|x| x.name == m.name && x.params == params) {
                 self.err(m.span, format!("method '{}' is already defined with the same parameter types", m.name));
@@ -1230,17 +1461,29 @@ impl<'a> Checker<'a> {
                 self.queue.push_back(Job { func: fid, kind: JobKind::Setter(idx, chain), module, class: Some(id), iface: None, subst: subst.clone(), is_static: false });
             }
         }
-        // an inherited method with the same parameters must keep its return type
+        // an inherited method with the same parameters must keep its return type, or narrow it to
+        // a subclass (covariant return): then the method also implements the inherited selector
+        let mut covariant: Vec<(FuncId, SelectorId)> = Vec::new();
         for m in &methods {
             if m.is_static || m.selector.is_none() {
                 continue;
             }
-            let clash = vtable.keys().chain(ifaces.iter().flat_map(|i| self.imeta[*i as usize].methods.iter().filter_map(|im| im.selector.as_ref()))).any(|s| {
-                let sel = &self.selectors[*s as usize];
-                sel.name == m.name && sel.params == m.params && sel.ret != m.ret
-            });
-            if clash {
-                self.err(m.span, format!("method '{}' overrides a method with a different return type", m.name));
+            let inherited: Vec<SelectorId> = vtable.keys().copied().chain(ifaces.iter().flat_map(|i| self.imeta[*i as usize].methods.iter().filter_map(|im| im.selector))).collect();
+            for s in inherited {
+                let sel = &self.selectors[s as usize];
+                if sel.name != m.name || sel.params != m.params || sel.ret == m.ret {
+                    continue;
+                }
+                let narrower = matches!(m.ret, Type::Class(_) | Type::Iface(_)) && matches!(sel.ret, Type::Class(_) | Type::Iface(_)) && self.assignable(&m.ret, &sel.ret);
+                if narrower {
+                    if let Some(f) = m.func {
+                        if !covariant.contains(&(f, s)) {
+                            covariant.push((f, s));
+                        }
+                    }
+                } else {
+                    self.err(m.span, format!("method '{}' overrides a method with a different return type", m.name));
+                }
             }
         }
         // vtable: own instance methods override inherited entries
@@ -1249,7 +1492,8 @@ impl<'a> Checker<'a> {
                 let inherited = vtable.contains_key(&sel);
                 let from_iface = ifaces.iter().any(|i| self.imeta[*i as usize].methods.iter().any(|im| im.selector == Some(sel)));
                 let implicit_root = (m.name == "equals" && m.params.len() == 1) || (m.name == "toString" && m.params.is_empty());
-                if m.overrides && !inherited && !from_iface && !implicit_root {
+                let is_covariant = covariant.iter().any(|(g, _)| *g == f);
+                if m.overrides && !inherited && !from_iface && !implicit_root && !is_covariant {
                     self.err(m.span, format!("method '{}' is marked @Override but does not override anything", m.name));
                 }
                 if inherited {
@@ -1263,6 +1507,9 @@ impl<'a> Checker<'a> {
             } else if m.overrides && m.is_static {
                 self.err(m.span, "static methods cannot override");
             }
+        }
+        for (f, s) in &covariant {
+            vtable.insert(*s, *f);
         }
         // interface methods: defaults and abstract checks
         let mut by_sel: HashMap<SelectorId, Vec<(IfaceId, Option<FuncId>, String, Span)>> = HashMap::new();
@@ -1379,19 +1626,36 @@ impl<'a> Checker<'a> {
         }
         self.cmeta[id as usize].ctors = ctors;
         self.cmeta[id as usize].state = 2;
+        // build subclasses that were waiting for this class
+        let ready: Vec<ClassId> = self.deferred.iter().filter(|(_, p)| *p == id).map(|(c, _)| *c).collect();
+        self.deferred.retain(|(_, p)| *p != id);
+        for c in ready {
+            let (decl, module, subst) = {
+                let m = &self.cmeta[c as usize];
+                (m.decl.unwrap(), m.module, m.subst.clone())
+            };
+            self.cmeta[c as usize].state = 1;
+            self.build_class(c, decl, module, subst);
+        }
     }
 
     /// All methods named `name` visible on a class or interface type (most derived first).
     pub fn lookup_methods(&self, owner: Owner, name: &str) -> Vec<MethodInfo> {
         let mut out: Vec<MethodInfo> = Vec::new();
-        let mut seen: HashSet<Vec<Type>> = HashSet::new();
+        // generic methods have no parameter types yet: they are told apart by arity
+        let key = |m: &MethodInfo| -> (Vec<Type>, Option<usize>) {
+            match m.generic {
+                Some(_) => (Vec::new(), Some(m.param_names.len())),
+                None => (m.params.clone(), None),
+            }
+        };
+        let mut seen: HashSet<(Vec<Type>, Option<usize>)> = HashSet::new();
         match owner {
             Owner::Class(c) => {
                 let mut cur = Some(c);
                 while let Some(cc) = cur {
                     for m in &self.cmeta[cc as usize].methods {
-                        if m.name == name && !seen.contains(&m.params) {
-                            seen.insert(m.params.clone());
+                        if m.name == name && seen.insert(key(m)) {
                             out.push(m.clone());
                         }
                     }
@@ -1399,8 +1663,7 @@ impl<'a> Checker<'a> {
                 }
                 for &i in &self.classes[c as usize].ifaces {
                     for m in &self.imeta[i as usize].methods {
-                        if m.name == name && !seen.contains(&m.params) {
-                            seen.insert(m.params.clone());
+                        if m.name == name && seen.insert(key(m)) {
                             out.push(m.clone());
                         }
                     }
@@ -1411,8 +1674,7 @@ impl<'a> Checker<'a> {
                 self.iface_ancestors(i, &mut anc);
                 for a in anc {
                     for m in &self.imeta[a as usize].methods {
-                        if m.name == name && !seen.contains(&m.params) {
-                            seen.insert(m.params.clone());
+                        if m.name == name && seen.insert(key(m)) {
                             out.push(m.clone());
                         }
                     }
@@ -1686,6 +1948,53 @@ impl<'a> Checker<'a> {
         f.locals = locals;
         f.body = body;
         fid
+    }
+}
+
+fn bound_name(b: &TypeExpr) -> String {
+    match b {
+        TypeExpr::Named { name, .. } => name.clone(),
+        _ => "?".into(),
+    }
+}
+
+/// `pkg.Name`, or `Name` in the default package.
+pub fn qualify(package: &str, name: &str) -> String {
+    if package.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}.{}", package, name)
+    }
+}
+
+impl<'a> Checker<'a> {
+    /// Shape rules of operator methods (spec 6.9).
+    fn check_operator_decl(&mut self, m: &ast::FuncDecl, nparams: usize, ret: &Type) {
+        let op = &m.name["operator".len()..];
+        if m.mods.access != Access::Public {
+            self.err(m.span, format!("operator method '{}' must be public", m.name));
+        }
+        if !m.type_params.is_empty() {
+            self.err(m.span, "operator methods cannot be generic");
+        }
+        let s = m.mods.is_static;
+        let ok = match op {
+            "[]" => !s && nparams >= 1 && *ret != Type::Void,
+            "[]=" => !s && nparams >= 2 && *ret == Type::Void,
+            "~" => *ret != Type::Void && nparams == if s { 1 } else { 0 },
+            "-" => *ret != Type::Void && (if s { nparams == 1 || nparams == 2 } else { nparams <= 1 }),
+            _ => *ret != Type::Void && nparams == if s { 2 } else { 1 },
+        };
+        if !ok {
+            let rule = match op {
+                "[]" => "an instance method with one or more index parameters and a result".to_string(),
+                "[]=" => "an instance method returning void with the index parameters followed by the value".to_string(),
+                "~" => "an instance method without parameters (or a static method with one parameter) with a result".to_string(),
+                "-" => "an instance method with 0 (negation) or 1 parameter, or a static method with 1 or 2 parameters, with a result".to_string(),
+                _ => "an instance method with one parameter (right operand) or a static method with two parameters, with a result".to_string(),
+            };
+            self.err(m.span, format!("'{}' must be {}", m.name, rule));
+        }
     }
 }
 

@@ -1,0 +1,6 @@
+// error: 'operator*' must be an instance method with one parameter (right operand) or a static method with two parameters
+public class Point {
+    public function Point operator*(&Point a, &Point b) { return Point() }
+}
+function void main() {
+}

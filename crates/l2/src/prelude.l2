@@ -88,3 +88,8 @@ public interface Droppable {
 
 public interface Comparable {
 }
+
+// Bound for numeric generic code (spec 4.12): satisfied by every built-in numeric type
+// (Int8..Int64, UInt8..UInt64, IntLarge, Float16..Float64); classes cannot implement it.
+public interface Numeric extends Comparable {
+}

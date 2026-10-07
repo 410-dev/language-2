@@ -1,0 +1,4 @@
+// error: interface 'Droppable' cannot be instantiated
+function void main() {
+    Droppable d = new Droppable()
+}

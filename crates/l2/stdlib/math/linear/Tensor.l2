@@ -1,0 +1,548 @@
+@using sdk 1
+
+// math.linear.Tensor: an n-dimensional array of numbers stored row-major (spec 14.4).
+//
+// The element type is any built-in numeric type (`Tensor[Int32]`, `Tensor[Float16]`, ...);
+// `Tensor` alone means `Tensor[Float64]`. Bulk arithmetic, rounding and migration run in the
+// runtime and may use worker threads when `allowMultithreading` is set; the results are the
+// same either way. Lambdas passed to forEach* always run on the calling thread.
+
+using intrinsics as intr
+
+public class Tensor[T extends Numeric = Float64] {
+    protected T[] data
+    protected Int64[] dims
+    // bulk operations of large tensors may run on worker threads
+    private getter setter.chain Boolean allowMultithreading = false
+    // upper bound on worker threads; 0 = one per available core
+    private getter setter.chain Int64 maxWorkerThreads = 0
+
+    // A zero tensor of the given shape.
+    public Tensor(Int64[] shape) {
+        Int64 n = checkShape(&shape)
+        this.data = T.array(n, true)
+        this.dims = shape
+    }
+
+    // A tensor of the given shape holding `values` (row-major).
+    public Tensor(Int64[] shape, T[] values) {
+        Int64 n = checkShape(&shape)
+        if (values.length() != n) {
+            throw IllegalArgumentException(f"shape {shapeText(&shape)} needs {n} values, got {values.length()}")
+        }
+        this.data = values
+        this.dims = shape
+    }
+
+    protected static function Int64 checkShape(&Int64[] shape) {
+        Int64 n = 1
+        for (d in shape) {
+            if (d < 0) {
+                throw IllegalArgumentException(f"negative dimension in shape {shapeText(shape)}")
+            }
+            n *= d
+        }
+        return n
+    }
+
+    protected static function String shapeText(&Int64[] shape) {
+        String s = "("
+        for (i, d in shape.kv()) {
+            if (i > 0) {
+                s.append(", ")
+            }
+            s.append(d)
+        }
+        if (shape.length() == 1) {
+            s.append(",")
+        }
+        s.append(")")
+        return s
+    }
+
+    // ------------------------------------------------------------------ factories
+    public static function Tensor[T] zeros(Int64[] shape) {
+        return new Tensor[T](shape)
+    }
+
+    public static function Tensor[T] ones(Int64[] shape) {
+        Tensor[T] t = new Tensor[T](shape)
+        T one = 1
+        t.data.fill(one)
+        return t
+    }
+
+    public static function Tensor[T] full(Int64[] shape, T value) {
+        Tensor[T] t = new Tensor[T](shape)
+        t.data.fill(value)
+        return t
+    }
+
+    // ------------------------------------------------------------------ shape
+    public function Int64[] shape() {
+        return dims.clone()
+    }
+
+    // number of dimensions
+    public function Int64 rank() {
+        return dims.length()
+    }
+
+    // number of elements
+    public function Int64 size() {
+        return data.length()
+    }
+
+    public function T[] toArray() {
+        return data.clone()
+    }
+
+    public function Tensor[T] reshape(Int64[] newShape) {
+        Int64 n = checkShape(&newShape)
+        if (n != data.length()) {
+            throw IllegalArgumentException(f"cannot reshape {shapeString()} into {shapeText(&newShape)}")
+        }
+        Tensor[T] t = new Tensor[T](newShape, data.clone())
+        t.copySettings(this)
+        return t
+    }
+
+    public function Vector[T] flatten() {
+        Vector[T] v = new Vector[T](data.clone())
+        v.copySettings(this)
+        return v
+    }
+
+    public function String shapeString() {
+        return shapeText(&dims)
+    }
+
+    protected function void copySettings(&Tensor[T] from) {
+        this.allowMultithreading = from.allowMultithreading
+        this.maxWorkerThreads = from.maxWorkerThreads
+    }
+
+    // the worker thread count handed to the runtime kernels (1 = sequential, 0 = automatic)
+    protected function Int64 workers() {
+        if (not allowMultithreading) {
+            return 1
+        }
+        return maxWorkerThreads < 0 ? 0 : maxWorkerThreads
+    }
+
+    protected function void requireSameShape(&Tensor[T] other, String op) {
+        if (dims != other.dims) {
+            throw IllegalArgumentException(f"{op}: shapes {shapeString()} and {other.shapeString()} differ")
+        }
+    }
+
+    // a tensor of this shape and settings holding `values`
+    protected function Tensor[T] like(T[] values) {
+        Tensor[T] t = new Tensor[T](dims.clone(), values)
+        t.copySettings(this)
+        return t
+    }
+
+    // ------------------------------------------------------------------ elements
+    // flat (row-major) position of a multi-index; negative indices count from the end
+    protected function Int64 offset(&Int64[] idx) {
+        if (idx.length() != dims.length()) {
+            throw IllegalArgumentException(f"tensor of rank {dims.length()} needs {dims.length()} indices, got {idx.length()}")
+        }
+        Int64 off = 0
+        for (k, i0 in idx.kv()) {
+            Int64 d = dims[k]
+            Int64 i = i0 < 0 ? i0 + d : i0
+            if (i < 0 or i >= d) {
+                throw IndexOutOfBoundsException(f"index {i0} is out of bounds for axis {k} with size {d}")
+            }
+            off = off * d + i
+        }
+        return off
+    }
+
+    public function T get(Int64[] idx) {
+        return data[offset(&idx)]
+    }
+
+    public function void set(Int64[] idx, T value) {
+        data[offset(&idx)] = value
+    }
+
+    public function T operator[](Int64[] idx) {
+        return data[offset(&idx)]
+    }
+
+    public function T operator[](Int64 i) {
+        Int64[] idx = [i]
+        return data[offset(&idx)]
+    }
+
+    public function T operator[](Int64 i, Int64 j) {
+        Int64[] idx = [i, j]
+        return data[offset(&idx)]
+    }
+
+    public function T operator[](Int64 i, Int64 j, Int64 k) {
+        Int64[] idx = [i, j, k]
+        return data[offset(&idx)]
+    }
+
+    public function T operator[](Int64 i, Int64 j, Int64 k, Int64 l) {
+        Int64[] idx = [i, j, k, l]
+        return data[offset(&idx)]
+    }
+
+    public function void operator[]=(Int64[] idx, T value) {
+        data[offset(&idx)] = value
+    }
+
+    public function void operator[]=(Int64 i, T value) {
+        Int64[] idx = [i]
+        data[offset(&idx)] = value
+    }
+
+    public function void operator[]=(Int64 i, Int64 j, T value) {
+        Int64[] idx = [i, j]
+        data[offset(&idx)] = value
+    }
+
+    public function void operator[]=(Int64 i, Int64 j, Int64 k, T value) {
+        Int64[] idx = [i, j, k]
+        data[offset(&idx)] = value
+    }
+
+    public function void operator[]=(Int64 i, Int64 j, Int64 k, Int64 l, T value) {
+        Int64[] idx = [i, j, k, l]
+        data[offset(&idx)] = value
+    }
+
+    // ------------------------------------------------------------------ arithmetic
+    public function Tensor[T] operator+(&Tensor[T] other) {
+        requireSameShape(other, "+")
+        return like(intr.zip("+", data, other.data, workers()))
+    }
+
+    public function Tensor[T] operator-(&Tensor[T] other) {
+        requireSameShape(other, "-")
+        return like(intr.zip("-", data, other.data, workers()))
+    }
+
+    public function Tensor[T] operator-() {
+        T zero = 0
+        return like(intr.scalar("-", data, zero, true, workers()))
+    }
+
+    public function Tensor[T] operator+(T s) {
+        return like(intr.scalar("+", data, s, false, workers()))
+    }
+
+    public function Tensor[T] operator-(T s) {
+        return like(intr.scalar("-", data, s, false, workers()))
+    }
+
+    public function Tensor[T] operator*(T s) {
+        return like(intr.scalar("*", data, s, false, workers()))
+    }
+
+    public function Tensor[T] operator/(T s) {
+        return like(intr.scalar("/", data, s, false, workers()))
+    }
+
+    public function Tensor[T] operator%(T s) {
+        return like(intr.scalar("%", data, s, false, workers()))
+    }
+
+    public static function Tensor[T] operator+(T s, &Tensor[T] t) {
+        return t.like(intr.scalar("+", t.data, s, true, t.workers()))
+    }
+
+    public static function Tensor[T] operator-(T s, &Tensor[T] t) {
+        return t.like(intr.scalar("-", t.data, s, true, t.workers()))
+    }
+
+    public static function Tensor[T] operator*(T s, &Tensor[T] t) {
+        return t.like(intr.scalar("*", t.data, s, true, t.workers()))
+    }
+
+    // element-wise product
+    public function Tensor[T] hadamard(&Tensor[T] other) {
+        requireSameShape(other, "hadamard")
+        return like(intr.zip("*", data, other.data, workers()))
+    }
+
+    // element-wise quotient
+    public function Tensor[T] divide(&Tensor[T] other) {
+        requireSameShape(other, "divide")
+        return like(intr.zip("/", data, other.data, workers()))
+    }
+
+    // element-wise power
+    public function Tensor[T] pow(T exponent) {
+        return like(intr.scalar("**", data, exponent, false, workers()))
+    }
+
+    public function Tensor[T] abs() {
+        T[] out = data.clone()
+        for (Int64 i = 0; i < out.length(); i += 1) {
+            out[i] = out[i].abs()
+        }
+        return like(out)
+    }
+
+    // ------------------------------------------------------------------ rounding (element-wise)
+    // same arguments as the number methods: (), (decimals), (wholeDigits, decimals)
+    public function Tensor[T] round() {
+        return like(intr.round(data, 0, 0, 0, 0, workers()))
+    }
+
+    public function Tensor[T] round(Int64 decimals) {
+        return like(intr.round(data, 0, 1, 0, decimals, workers()))
+    }
+
+    public function Tensor[T] round(Int64 whole, Int64 decimals) {
+        return like(intr.round(data, 0, 2, whole, decimals, workers()))
+    }
+
+    public function Tensor[T] ceil() {
+        return like(intr.round(data, 1, 0, 0, 0, workers()))
+    }
+
+    public function Tensor[T] ceil(Int64 decimals) {
+        return like(intr.round(data, 1, 1, 0, decimals, workers()))
+    }
+
+    public function Tensor[T] ceil(Int64 whole, Int64 decimals) {
+        return like(intr.round(data, 1, 2, whole, decimals, workers()))
+    }
+
+    public function Tensor[T] floor() {
+        return like(intr.round(data, 2, 0, 0, 0, workers()))
+    }
+
+    public function Tensor[T] floor(Int64 decimals) {
+        return like(intr.round(data, 2, 1, 0, decimals, workers()))
+    }
+
+    public function Tensor[T] floor(Int64 whole, Int64 decimals) {
+        return like(intr.round(data, 2, 2, whole, decimals, workers()))
+    }
+
+    // ------------------------------------------------------------------ element type migration
+    // converts every element to U; narrowing rounds ("round", the default), or "ceil" / "floor"
+    public function Tensor[U] migrate[U extends Numeric]() {
+        return this.migrate[U]("round")
+    }
+
+    public function Tensor[U] migrate[U extends Numeric](String method) {
+        Tensor[U] t = new Tensor[U](dims.clone(), intr.migrate[U](data, method, workers()))
+        t.allowMultithreading(allowMultithreading)
+        t.maxWorkerThreads(maxWorkerThreads)
+        return t
+    }
+
+    // ------------------------------------------------------------------ reductions
+    public function T sum() {
+        T acc = 0
+        for (x in data) {
+            acc += x
+        }
+        return acc
+    }
+
+    public function T product() {
+        T acc = 1
+        for (x in data) {
+            acc *= x
+        }
+        return acc
+    }
+
+    public function T min() {
+        if (data.isEmpty()) {
+            throw IllegalArgumentException("min() of an empty tensor")
+        }
+        T best = data[0]
+        for (x in data) {
+            if (x < best) {
+                best = x
+            }
+        }
+        return best
+    }
+
+    public function T max() {
+        if (data.isEmpty()) {
+            throw IllegalArgumentException("max() of an empty tensor")
+        }
+        T best = data[0]
+        for (x in data) {
+            if (x > best) {
+                best = x
+            }
+        }
+        return best
+    }
+
+    public function Float64 mean() {
+        if (data.isEmpty()) {
+            throw IllegalArgumentException("mean() of an empty tensor")
+        }
+        Float64 acc = 0.0
+        for (x in data) {
+            acc += x.castTo(Float64)
+        }
+        return acc / data.length()
+    }
+
+    // ------------------------------------------------------------------ lambdas
+    // a new tensor with `f` applied to every element
+    public function Tensor[T] map(Function[(T), T] f) {
+        T[] out = data.clone()
+        for (Int64 i = 0; i < out.length(); i += 1) {
+            out[i] = f(out[i])
+        }
+        return like(out)
+    }
+
+    // replaces every element by f(element)
+    public function void forEachElement(Function[(T), T] f) {
+        for (Int64 i = 0; i < data.length(); i += 1) {
+            data[i] = f(data[i])
+        }
+    }
+
+    // replaces every element by f(multiIndex, element)
+    public function void forEachElement(Function[(Int64[], T), T] f) {
+        Int64[] idx = Int64.array(dims.length(), true)
+        for (Int64 i = 0; i < data.length(); i += 1) {
+            data[i] = f(idx.clone(), data[i])
+            for (Int64 k = dims.length() - 1; k >= 0; k -= 1) {
+                idx[k] += 1
+                if (idx[k] < dims[k]) {
+                    break
+                }
+                idx[k] = 0
+            }
+        }
+    }
+
+    // rows: the 1-D slices along the last axis; columns: along the second-to-last axis
+    // (a rank-1 tensor is a single row, so each of its columns has one element)
+    protected function Int64 rowLength() {
+        if (dims.isEmpty()) {
+            throw UnsupportedOperationException("a rank-0 tensor has no rows or columns")
+        }
+        return dims[-1]
+    }
+
+    protected function Int64 columnLength() {
+        rowLength()
+        return dims.length() >= 2 ? dims[-2] : 1
+    }
+
+    // replaces every row by f(row); the result must have the row's length
+    public function void forEachRow(Function[(Vector[T]), Vector[T]] f) {
+        forEachRow((Int64 i, Vector[T] row) -> f(row))
+    }
+
+    // replaces every row by f(rowIndex, row) (rows are numbered in row-major order)
+    public function void forEachRow(Function[(Int64, Vector[T]), Vector[T]] f) {
+        Int64 n = rowLength()
+        Int64 count = n == 0 ? 0 : data.length() / n
+        for (Int64 r = 0; r < count; r += 1) {
+            T[] slice = T.array(n, true)
+            for (Int64 j = 0; j < n; j += 1) {
+                slice[j] = data[r * n + j]
+            }
+            Vector[T] out = f(r, new Vector[T](slice))
+            if (out.data.length() != n) {
+                throw IllegalArgumentException(f"forEachRow: a row of length {n} was replaced by one of length {out.data.length()}")
+            }
+            for (Int64 j = 0; j < n; j += 1) {
+                data[r * n + j] = out.data[j]
+            }
+        }
+    }
+
+    // replaces every column by f(column); the result must have the column's length
+    public function void forEachColumn(Function[(Vector[T]), Vector[T]] f) {
+        forEachColumn((Int64 i, Vector[T] column) -> f(column))
+    }
+
+    // replaces every column by f(columnIndex, column)
+    public function void forEachColumn(Function[(Int64, Vector[T]), Vector[T]] f) {
+        Int64 cols = rowLength()
+        Int64 rows = columnLength()
+        Int64 block = rows * cols
+        Int64 blocks = block == 0 ? 0 : data.length() / block
+        Int64 index = 0
+        for (Int64 b = 0; b < blocks; b += 1) {
+            for (Int64 j = 0; j < cols; j += 1) {
+                T[] slice = T.array(rows, true)
+                for (Int64 i = 0; i < rows; i += 1) {
+                    slice[i] = data[b * block + i * cols + j]
+                }
+                Vector[T] out = f(index, new Vector[T](slice))
+                if (out.data.length() != rows) {
+                    throw IllegalArgumentException(f"forEachColumn: a column of length {rows} was replaced by one of length {out.data.length()}")
+                }
+                for (Int64 i = 0; i < rows; i += 1) {
+                    data[b * block + i * cols + j] = out.data[i]
+                }
+                index += 1
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ comparison and text
+    public function Boolean equals(&Tensor[T] other) {
+        return dims == other.dims and data == other.data
+    }
+
+    // nested brackets with aligned columns, like numpy
+    public function String toString() {
+        if (dims.isEmpty()) {
+            return f"{data[0]}"
+        }
+        String[] cells = String.array(data.length(), true)
+        Int64 width = 0
+        for (i, x in data.kv()) {
+            cells[i] = f"{x}"
+            width = Int.max(width, cells[i].length())
+        }
+        return render(&cells, 0, 0, width)
+    }
+
+    private function String render(&String[] cells, Int64 axis, Int64 start, Int64 width) {
+        Int64 n = dims[axis]
+        Int64 stride = 1
+        for (Int64 k = axis + 1; k < dims.length(); k += 1) {
+            stride *= dims[k]
+        }
+        Boolean last = axis == dims.length() - 1
+        String s = "["
+        for (Int64 i = 0; i < n; i += 1) {
+            if (i > 0) {
+                if (last) {
+                    s.append(", ")
+                } else {
+                    s.append(",")
+                    for (Int64 k = axis + 1; k < dims.length(); k += 1) {
+                        s.append("\n")
+                    }
+                    for (Int64 k = 0; k <= axis; k += 1) {
+                        s.append(" ")
+                    }
+                }
+            }
+            if (last) {
+                s.append(f"{cells[start + i]:>{width}}")
+            } else {
+                s.append(render(cells, axis + 1, start + i * stride, width))
+            }
+        }
+        s.append("]")
+        return s
+    }
+}

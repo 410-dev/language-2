@@ -44,7 +44,7 @@ fn imports_of(f: &FileAst) -> Vec<String> {
     let mut out = Vec::new();
     for it in &f.items {
         match it {
-            Item::Using { module, .. } => out.push(module.clone()),
+            Item::Using(u) => out.push(u.path.clone()),
             Item::Function(d) => {
                 if let Some(b) = &d.body {
                     collect_stmt_imports(&b.stmts, &mut out);
@@ -65,8 +65,8 @@ fn imports_of(f: &FileAst) -> Vec<String> {
 
 fn collect_stmt_imports(stmts: &[crate::ast::Stmt], out: &mut Vec<String>) {
     for s in stmts {
-        if let StmtKind::Using { module, .. } = &s.kind {
-            out.push(module.clone());
+        if let StmtKind::Using(u) = &s.kind {
+            out.push(u.path.clone());
         }
     }
 }
@@ -87,39 +87,134 @@ pub fn compile_source(entry_name: &str, src: &str, base: Option<&Path>) -> Resul
     let stem = Path::new(entry_name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     files.push(entry);
     names.push(stem);
+    let mut stdlib = vec![false, false];
     let mut queue: VecDeque<usize> = VecDeque::from([1]);
     let mut diags = Vec::new();
     while let Some(i) = queue.pop_front() {
-        for m in imports_of(&files[i]) {
-            if m == "stdio" || names.contains(&m) {
+        for path in imports_of(&files[i]) {
+            if path == "stdio" || path == "intrinsics" {
                 continue;
             }
-            let Some(base) = base else { continue };
-            let mut p: PathBuf = base.to_path_buf();
-            for part in m.split('.') {
-                p.push(part);
-            }
-            p.set_extension(SOURCE_EXT);
-            match std::fs::read_to_string(&p) {
-                Ok(text) => match parse(&mut sources, p.display().to_string(), text) {
+            for (name, src) in modules_for(&path, base) {
+                if names.contains(&name) {
+                    continue;
+                }
+                let (label, text, is_std) = match src {
+                    Source::File(p) => match std::fs::read_to_string(&p) {
+                        Ok(t) => (p.display().to_string(), t, false),
+                        Err(_) => continue, // reported by the checker as an unknown module
+                    },
+                    Source::Std(t) => (format!("<stdlib>/{}.{}", name.replace('.', "/"), SOURCE_EXT), t.to_string(), true),
+                };
+                match parse(&mut sources, label, text) {
                     Ok(f) => {
                         files.push(f);
-                        names.push(m.clone());
+                        names.push(name);
+                        stdlib.push(is_std);
                         queue.push_back(files.len() - 1);
                     }
                     Err(d) => diags.push(d),
-                },
-                Err(_) => {} // reported by the checker as an unknown module
+                }
             }
         }
     }
     if !diags.is_empty() {
         return Err(Failure { sources, diags });
     }
-    match crate::check::check_program(&files, &names, 1) {
+    match crate::check::check_program(&files, &names, 1, &stdlib) {
         Ok(out) => Ok(Compilation { program: out.program, sources, warnings: out.warnings }),
         Err(diags) => Err(Failure { sources, diags }),
     }
+}
+
+/// Standard library modules (spec 14.4), embedded in the compiler.
+pub const STDLIB: &[(&str, &str)] = &[
+    ("math.linear.Tensor", include_str!("../stdlib/math/linear/Tensor.l2")),
+    ("math.linear.Matrix", include_str!("../stdlib/math/linear/Matrix.l2")),
+    ("math.linear.Vector", include_str!("../stdlib/math/linear/Vector.l2")),
+];
+
+enum Source {
+    File(PathBuf),
+    Std(&'static str),
+}
+
+fn package_of(module: &str) -> &str {
+    module.rsplit_once('.').map(|(p, _)| p).unwrap_or("")
+}
+
+fn user_module(base: Option<&Path>, module: &str) -> Option<PathBuf> {
+    let mut p: PathBuf = base?.to_path_buf();
+    for part in module.split('.') {
+        p.push(part);
+    }
+    p.set_extension(SOURCE_EXT);
+    p.is_file().then_some(p)
+}
+
+/// All modules of a package: the source files of a project directory, or standard library
+/// modules. User files take precedence over standard library modules of the same name.
+fn package_modules(base: Option<&Path>, package: &str) -> Vec<(String, Source)> {
+    let mut out: Vec<(String, Source)> = Vec::new();
+    if package.is_empty() {
+        return out;
+    }
+    if let Some(b) = base {
+        let mut dir = b.to_path_buf();
+        for part in package.split('.') {
+            dir.push(part);
+        }
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            let mut files: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_file() && p.extension().map(|e| e == SOURCE_EXT).unwrap_or(false)).collect();
+            files.sort();
+            for f in files {
+                let stem = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                out.push((format!("{}.{}", package, stem), Source::File(f)));
+            }
+        }
+    }
+    for (name, src) in STDLIB {
+        if package_of(name) == package && !out.iter().any(|(n, _)| n == name) {
+            out.push((name.to_string(), Source::Std(src)));
+        }
+    }
+    out
+}
+
+fn single_module(base: Option<&Path>, module: &str) -> Option<Source> {
+    if let Some(p) = user_module(base, module) {
+        return Some(Source::File(p));
+    }
+    STDLIB.iter().find(|(n, _)| *n == module).map(|(_, s)| Source::Std(s))
+}
+
+/// The modules to load for `using path`: the module itself (`a.b.C` -> `a/b/C.l2`), a whole
+/// package (`a.b` / `a.b.*`), or the module / package declaring a type (`a.b.Type`). Modules
+/// of a named package bring their whole package along, so that types of the same package can
+/// refer to each other.
+fn modules_for(path: &str, base: Option<&Path>) -> Vec<(String, Source)> {
+    let mut out: Vec<(String, Source)> = Vec::new();
+    let add_package = |out: &mut Vec<(String, Source)>, pkg: &str| {
+        for (n, s) in package_modules(base, pkg) {
+            if !out.iter().any(|(m, _)| *m == n) {
+                out.push((n, s));
+            }
+        }
+    };
+    let candidates = [Some(path), path.rsplit_once('.').map(|(p, _)| p)];
+    for cand in candidates.into_iter().flatten() {
+        if let Some(src) = single_module(base, cand) {
+            out.push((cand.to_string(), src));
+            add_package(&mut out, package_of(cand));
+            return out;
+        }
+        let pkg = package_modules(base, cand);
+        if !pkg.is_empty() {
+            add_package(&mut out, cand);
+            return out;
+        }
+    }
+    out
 }
 
 pub fn compile_file(path: &Path) -> Result<Compilation, Failure> {

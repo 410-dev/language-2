@@ -156,6 +156,9 @@ impl Host for NHost {
         }
         default_object_string(o, self)
     }
+    fn obj_default_string(&mut self, o: &Rc<Object>) -> Result<String, Value> {
+        default_object_string(o, self)
+    }
     fn obj_equals(&mut self, a: &Rc<Object>, b: &Rc<Object>) -> Result<bool, Value> {
         let f = ST.with(|s| s.borrow().classes.get(a.class as usize).and_then(|c| c.equals));
         if let Some(f) = f {

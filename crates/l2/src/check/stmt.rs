@@ -378,27 +378,12 @@ impl<'a> Checker<'a> {
                 vec![st(StmtKind::Try { body: b, catches: hc, finally: f }, span)]
             }
             S::Block(b) => self.block(b),
-            S::Using { module, alias } => {
-                if let Some(imp) = self.resolve_import_pub(module, span) {
-                    let m = self.cur_ref().module;
-                    self.modules[m].imports.insert(alias.clone(), imp);
-                }
+            S::Using(u) => {
+                let m = self.cur_ref().module;
+                self.bind_using(m, u);
                 Vec::new()
             }
         }
-    }
-
-    pub fn resolve_import_pub(&mut self, module: &str, span: Span) -> Option<Import> {
-        if module == "stdio" {
-            return Some(Import::Stdio);
-        }
-        for (i, m) in self.modules.iter().enumerate() {
-            if m.name == module && !m.is_prelude {
-                return Some(Import::Module(i));
-            }
-        }
-        self.err(span, format!("unknown module '{}'", module));
-        None
     }
 
     /// Locals proven non-null in the then-branch and in the else-branch of a condition.
@@ -568,69 +553,10 @@ impl<'a> Checker<'a> {
     }
 
     fn assign(&mut self, target: &'a ast::Expr, op: Option<BinOp>, value: &'a ast::Expr, span: Span) -> Vec<HStmt> {
-        // indexed assignment: arr[i] = v  ->  arr.set(i, v)
+        // indexed assignment: arr[i] = v  ->  arr.set(i, v); grid[i, j] = v  ->  grid[i][j] = v;
+        // obj[i, j] = v  ->  obj.operator[]=(i, j, v)
         if let A::Index(base, idx) = &target.kind {
-            if idx.len() != 1 {
-                self.err(span, "expected exactly one index");
-                return Vec::new();
-            }
-            let Some((place, bty, mutable, why)) = self.place_of(base) else {
-                self.err(span, "indexed assignment needs a variable or field");
-                return Vec::new();
-            };
-            if !mutable {
-                self.err(span, format!("cannot modify: {}", why));
-            }
-            let mut pre = Vec::new();
-            return match bty.deref().clone() {
-                Type::Array(et) => {
-                    let i = self.index_arg(&idx[0]);
-                    let ti = self.temp(Type::int64(), span);
-                    pre.push(st(StmtKind::Let(ti, Some(i)), span));
-                    let iread = HExpr::new(H::Local(ti), Type::int64(), span);
-                    let val = match op {
-                        Some(op) => {
-                            let cur_arr = self.place_read(&place, &bty, span);
-                            let cur = HExpr::new(H::Builtin(Builtin::ArrAt, vec![cur_arr, iread.clone()]), (*et).clone(), span);
-                            let rhs = self.expr(value, Some(&et));
-                            self.binary_typed(op, cur, rhs, span)
-                        }
-                        None => self.expr(value, Some(&et)),
-                    };
-                    let val = self.coerce(val, &et, value.span);
-                    let val = self.consume(val);
-                    pre.push(st(StmtKind::Expr(HExpr::new(H::BuiltinMut(Builtin::ArrSet, Box::new(place), vec![iread, val]), Type::Void, span)), span));
-                    pre
-                }
-                Type::Dict(kt, vt) => {
-                    let k = self.expr(&idx[0], Some(&kt));
-                    let k = self.coerce(k, &kt, idx[0].span);
-                    let k = self.consume(k);
-                    let tk = self.temp((*kt).clone(), span);
-                    pre.push(st(StmtKind::Let(tk, Some(k)), span));
-                    let kread = HExpr::new(H::Local(tk), (*kt).clone(), span);
-                    let val = match op {
-                        Some(op) => {
-                            let cur_d = self.place_read(&place, &bty, span);
-                            let cur = HExpr::new(H::Builtin(Builtin::DictGet, vec![cur_d, kread.clone()]), (*vt).clone(), span);
-                            let rhs = self.expr(value, Some(&vt));
-                            self.binary_typed(op, cur, rhs, span)
-                        }
-                        None => self.expr(value, Some(&vt)),
-                    };
-                    let val = self.coerce(val, &vt, value.span);
-                    let val = self.consume(val);
-                    // the key temporary is never dropped, so it can be handed over without a move
-                    pre.push(st(StmtKind::Expr(HExpr::new(H::BuiltinMut(Builtin::DictSet, Box::new(place), vec![kread, val]), Type::Void, span)), span));
-                    pre
-                }
-                Type::Error => Vec::new(),
-                other => {
-                    let n = self.tname(&other);
-                    self.err(span, format!("type {} does not support indexed assignment", n));
-                    Vec::new()
-                }
-            };
+            return self.index_assign(base, idx, op, value, span);
         }
         let Some((place, ty, mutable, why)) = self.place_of(target) else {
             self.err(span, "invalid assignment target");
@@ -644,6 +570,11 @@ impl<'a> Checker<'a> {
             self.invalidate_narrowing(id);
         }
         let v = match op {
+            Some(op) if self.is_object(&ty) => {
+                let cur = self.place_read(&place, &ty, span);
+                let combined = self.operator_binary(op, expr::OArg::Done(cur), expr::OArg::Ast(value), span);
+                self.coerce(combined, &ty, span)
+            }
             Some(op) => {
                 let cur = self.place_read(&place, &ty, span);
                 let rhs = if expr::is_literalish(value) { self.expr(value, Some(&ty)) } else { self.expr(value, None) };
@@ -670,6 +601,177 @@ impl<'a> Checker<'a> {
             }
         }
         vec![st(StmtKind::Assign(place, v), span)]
+    }
+
+    /// `base[i, j, ...] (op)= value`: indices walk through nested arrays / dictionaries; an object
+    /// takes all remaining indices through `operator[]=` (spec 13.2, 6.9).
+    fn index_assign(&mut self, base: &'a ast::Expr, idx: &'a [ast::Expr], op: Option<BinOp>, value: &'a ast::Expr, span: Span) -> Vec<HStmt> {
+        if idx.is_empty() {
+            self.err(span, "expected an index");
+            return Vec::new();
+        }
+        let mut pre = Vec::new();
+        // the container: a place when it can be one, else a value (objects only)
+        let mut place = self.place_of(base);
+        let mut value_base: Option<HExpr> = None;
+        if place.is_none() {
+            let b = self.expr(base, None);
+            if !self.is_object(&b.ty) && !b.ty.is_error() {
+                self.err(span, "indexed assignment needs a variable or field");
+                return Vec::new();
+            }
+            value_base = Some(b);
+        }
+        let mut i = 0;
+        loop {
+            let rest = &idx[i..];
+            let cty = match (&place, &value_base) {
+                (Some((_, t, _, _)), _) => t.deref().clone(),
+                (None, Some(b)) => b.ty.deref().clone(),
+                _ => Type::Error,
+            };
+            match cty {
+                Type::Class(_) | Type::Iface(_) => {
+                    let obj = match (&place, value_base.take()) {
+                        (_, Some(b)) => b,
+                        (Some((p, t, _, _)), None) => self.place_read(p, t, span),
+                        _ => unreachable!(),
+                    };
+                    pre.extend(self.operator_index_assign(obj, rest, op, value, span));
+                    return pre;
+                }
+                Type::Array(_) | Type::Dict(_, _) if rest.len() > 1 => {
+                    let Some((p, t, mutable, why)) = place.take() else {
+                        self.err(span, "indexed assignment needs a variable or field");
+                        return Vec::new();
+                    };
+                    let (key, ety) = match t.deref().clone() {
+                        Type::Array(et) => (self.index_arg(&rest[0]), *et),
+                        Type::Dict(kt, vt) => {
+                            let k = self.expr(&rest[0], Some(&kt));
+                            (self.coerce(k, &kt, rest[0].span), *vt)
+                        }
+                        _ => unreachable!(),
+                    };
+                    self.mark_place_root_cell_pub(&p);
+                    place = Some((Place::Elem(Box::new(p), Box::new(key)), ety, mutable, why));
+                    i += 1;
+                }
+                Type::Array(_) | Type::Dict(_, _) => break,
+                Type::Error => return Vec::new(),
+                other => {
+                    let n = self.tname(&other);
+                    self.err(span, format!("type {} does not support indexed assignment", n));
+                    return Vec::new();
+                }
+            }
+        }
+        let Some((place, bty, mutable, why)) = place else {
+            self.err(span, "indexed assignment needs a variable or field");
+            return Vec::new();
+        };
+        let last = &idx[idx.len() - 1];
+        if !mutable {
+            self.err(span, format!("cannot modify: {}", why));
+        }
+        match bty.deref().clone() {
+            Type::Array(et) => {
+                let i = self.index_arg(last);
+                let ti = self.temp(Type::int64(), span);
+                pre.push(st(StmtKind::Let(ti, Some(i)), span));
+                let iread = HExpr::new(H::Local(ti), Type::int64(), span);
+                let val = match op {
+                    Some(op) => {
+                        let cur_arr = self.place_read(&place, &bty, span);
+                        let cur = HExpr::new(H::Builtin(Builtin::ArrAt, vec![cur_arr, iread.clone()]), (*et).clone(), span);
+                        self.compound_value(op, cur, value, &et, span)
+                    }
+                    None => self.expr(value, Some(&et)),
+                };
+                let val = self.coerce(val, &et, value.span);
+                let val = self.consume(val);
+                pre.push(st(StmtKind::Expr(HExpr::new(H::BuiltinMut(Builtin::ArrSet, Box::new(place), vec![iread, val]), Type::Void, span)), span));
+                pre
+            }
+            Type::Dict(kt, vt) => {
+                let k = self.expr(last, Some(&kt));
+                let k = self.coerce(k, &kt, last.span);
+                let k = self.consume(k);
+                let tk = self.temp((*kt).clone(), span);
+                pre.push(st(StmtKind::Let(tk, Some(k)), span));
+                let kread = HExpr::new(H::Local(tk), (*kt).clone(), span);
+                let val = match op {
+                    Some(op) => {
+                        let cur_d = self.place_read(&place, &bty, span);
+                        let cur = HExpr::new(H::Builtin(Builtin::DictGet, vec![cur_d, kread.clone()]), (*vt).clone(), span);
+                        self.compound_value(op, cur, value, &vt, span)
+                    }
+                    None => self.expr(value, Some(&vt)),
+                };
+                let val = self.coerce(val, &vt, value.span);
+                let val = self.consume(val);
+                // the key temporary is never dropped, so it can be handed over without a move
+                pre.push(st(StmtKind::Expr(HExpr::new(H::BuiltinMut(Builtin::DictSet, Box::new(place), vec![kread, val]), Type::Void, span)), span));
+                pre
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// `cur op value` for compound assignments.
+    fn compound_value(&mut self, op: BinOp, cur: HExpr, value: &'a ast::Expr, ty: &Type, span: Span) -> HExpr {
+        if self.is_object(ty) {
+            return self.operator_binary(op, expr::OArg::Done(cur), expr::OArg::Ast(value), span);
+        }
+        let rhs = self.expr(value, Some(ty));
+        self.binary_typed(op, cur, rhs, span)
+    }
+
+    /// `obj[i, j] (op)= v` through `operator[]=` (and `operator[]` for compound assignments).
+    fn operator_index_assign(&mut self, obj: HExpr, idx: &'a [ast::Expr], op: Option<BinOp>, value: &'a ast::Expr, span: Span) -> Vec<HStmt> {
+        let mut pre = Vec::new();
+        // an object produced by an expression (not read from a place) is owned by the temporary
+        let owned = !matches!(obj.ty, Type::Ref(..)) && !matches!(obj.kind, H::Local(_) | H::Field(..) | H::Global(_) | H::Deref(_) | H::Unwrap(_));
+        let otmp = self.temp(obj.ty.clone(), span);
+        if owned {
+            self.cur().scopes.last_mut().unwrap().owned.push(otmp);
+        }
+        let oty = obj.ty.clone();
+        pre.push(st(StmtKind::Let(otmp, Some(obj)), span));
+        let oread = HExpr::new(H::Local(otmp), oty.clone(), span);
+        match op {
+            None => {
+                let mut args: Vec<expr::OArg<'a>> = idx.iter().map(expr::OArg::Ast).collect();
+                args.push(expr::OArg::Ast(value));
+                let call = self.operator_call(oread, "operator[]=", args, span, "indexed assignment");
+                pre.push(st(StmtKind::Expr(call), span));
+            }
+            Some(op) => {
+                // evaluate the indices once
+                let mut reads: Vec<HExpr> = Vec::new();
+                for e in idx {
+                    let x = self.expr(e, None);
+                    let t = self.temp(x.ty.clone(), e.span);
+                    let ty = x.ty.clone();
+                    pre.push(st(StmtKind::Let(t, Some(x)), e.span));
+                    reads.push(HExpr::new(H::Local(t), ty, e.span));
+                }
+                let get_args: Vec<expr::OArg<'a>> = reads.iter().cloned().map(expr::OArg::Done).collect();
+                let cur = self.operator_call(oread.clone(), "operator[]", get_args, span, "indexing");
+                let combined = if self.is_object(&cur.ty) {
+                    self.operator_binary(op, expr::OArg::Done(cur), expr::OArg::Ast(value), span)
+                } else {
+                    let cty = cur.ty.clone();
+                    let rhs = if expr::is_literalish(value) { self.expr(value, Some(&cty)) } else { self.expr(value, None) };
+                    self.binary_typed(op, cur, rhs, span)
+                };
+                let mut set_args: Vec<expr::OArg<'a>> = reads.into_iter().map(expr::OArg::Done).collect();
+                set_args.push(expr::OArg::Done(combined));
+                let call = self.operator_call(oread, "operator[]=", set_args, span, "indexed assignment");
+                pre.push(st(StmtKind::Expr(call), span));
+            }
+        }
+        pre
     }
 
     fn ret(&mut self, e: Option<&'a ast::Expr>, span: Span) -> Vec<HStmt> {

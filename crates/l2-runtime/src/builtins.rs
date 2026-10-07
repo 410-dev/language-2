@@ -1,5 +1,6 @@
 //! Library functions shared by every backend (strings, numbers, arrays, dictionaries, stdio).
 
+use crate::numeric::{self, RoundMode, RoundSpec};
 use crate::ops::*;
 use crate::value::*;
 use std::cell::Cell;
@@ -38,6 +39,10 @@ builtins! {
     // dictionaries
     DictGet, DictSet, DictKv, DictMerge, DictLength, DictIsEmpty, DictContainsKey, DictRemove,
     DictKeys, DictValues,
+    // rounding, formatting, default toString
+    NumRound, NumCeil, NumFloor, NumAbs, FormatValue, DefaultToString,
+    // bulk numeric kernels (math.linear intrinsics)
+    TensorZip, TensorScalar, TensorMatMul, TensorRound, TensorMigrate, TensorTranspose,
 }
 
 impl Builtin {
@@ -252,8 +257,13 @@ fn is_placeholder_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// Finds `%name%` placeholders; returns byte ranges.
+/// Finds `%name%` and `%name:spec%` placeholders; returns byte ranges.
 pub fn find_placeholders(s: &str) -> Vec<(usize, usize)> {
+    find_placeholders_spec(s).into_iter().map(|(a, b, _)| (a, b)).collect()
+}
+
+/// Like [`find_placeholders`], also returning the format specifier of `%name:spec%`.
+pub fn find_placeholders_spec(s: &str) -> Vec<(usize, usize, Option<String>)> {
     let mut out = Vec::new();
     let b: Vec<(usize, char)> = s.char_indices().collect();
     let mut i = 0;
@@ -263,10 +273,24 @@ pub fn find_placeholders(s: &str) -> Vec<(usize, usize)> {
             while j < b.len() && is_placeholder_char(b[j].1) {
                 j += 1;
             }
-            if j < b.len() && b[j].1 == '%' && j > i + 1 {
-                out.push((b[i].0, b[j].0 + 1));
-                i = j + 1;
-                continue;
+            if j > i + 1 && j < b.len() {
+                if b[j].1 == '%' {
+                    out.push((b[i].0, b[j].0 + 1, None));
+                    i = j + 1;
+                    continue;
+                }
+                if b[j].1 == ':' {
+                    let mut k = j + 1;
+                    while k < b.len() && b[k].1 != '%' && b[k].1 != '\n' {
+                        k += 1;
+                    }
+                    if k < b.len() && b[k].1 == '%' {
+                        let spec = s[b[j].0 + 1..b[k].0].to_string();
+                        out.push((b[i].0, b[k].0 + 1, Some(spec)));
+                        i = k + 1;
+                        continue;
+                    }
+                }
             }
         }
         i += 1;
@@ -275,7 +299,7 @@ pub fn find_placeholders(s: &str) -> Vec<(usize, usize)> {
 }
 
 pub fn substitute_placeholders<H: Host>(s: &str, args: &[Value], h: &mut H) -> Result<String, H::Err> {
-    let ph = find_placeholders(s);
+    let ph = find_placeholders_spec(s);
     if ph.len() != args.len() {
         return Err(h.throw(
             ExcKind::IllegalArgument,
@@ -284,9 +308,12 @@ pub fn substitute_placeholders<H: Host>(s: &str, args: &[Value], h: &mut H) -> R
     }
     let mut out = String::new();
     let mut last = 0;
-    for ((a, b), v) in ph.iter().zip(args.iter()) {
+    for ((a, b, spec), v) in ph.iter().zip(args.iter()) {
         out.push_str(&s[last..*a]);
-        out.push_str(&to_display(v, h)?);
+        match spec {
+            Some(sp) => out.push_str(&crate::format::format_value(v, sp, "", h)?),
+            None => out.push_str(&to_display(v, h)?),
+        }
         last = *b;
     }
     out.push_str(&s[last..]);
@@ -624,6 +651,67 @@ pub fn call<H: Host>(b: Builtin, args: Vec<Value>, h: &mut H) -> Result<Value, H
         DictContainsKey => Value::Bool(dict_arg(&args[0], h)?.get(&args[1].deref()).is_some()),
         DictKeys => Value::array(dict_arg(&args[0], h)?.entries.iter().map(|(k, _)| k.clone()).collect(), false),
         DictValues => Value::array(dict_arg(&args[0], h)?.entries.iter().map(|(_, v)| v.clone()).collect(), false),
+
+        // ---------------- rounding / formatting
+        NumRound | NumCeil | NumFloor => {
+            let mode = match b {
+                NumCeil => RoundMode::Ceil,
+                NumFloor => RoundMode::Floor,
+                _ => RoundMode::Round,
+            };
+            // args: receiver, wrap, [digits...]
+            let wrap = args[1].deref().as_bool();
+            let digits: Vec<i128> = args[2..].iter().map(|v| v.deref().as_int()).collect();
+            let spec = RoundSpec::from_args(&digits).map_err(|e| h.throw(ExcKind::IllegalArgument, e))?;
+            numeric::round_value(&a0(), spec, mode, wrap, h)?
+        }
+        NumAbs => numeric::abs_value(&a0(), args[1].deref().as_bool(), h)?,
+        FormatValue => Value::str(crate::format::format_value(&a0(), &arg_str(&args, 1), &arg_str(&args, 2), h)?),
+        DefaultToString => match a0() {
+            Value::Object(o) => Value::str(h.obj_default_string(&o)?),
+            other => Value::str(to_display(&other, h)?),
+        },
+
+        // ---------------- bulk numeric kernels
+        TensorZip => {
+            // op, a, b, wrap, threads
+            let op = ArithOp::from_code(arg_int(&args, 0, 0) as u8);
+            numeric::zip(op, &args[1], &args[2], args[3].deref().as_bool(), arg_int(&args, 4, 1), h)?
+        }
+        TensorScalar => {
+            // op, a, scalar, scalar_left, wrap, threads
+            let op = ArithOp::from_code(arg_int(&args, 0, 0) as u8);
+            numeric::scalar(op, &args[1], &args[2], args[3].deref().as_bool(), args[4].deref().as_bool(), arg_int(&args, 5, 1), h)?
+        }
+        TensorMatMul => {
+            // a, b, n, k, m, wrap, threads
+            let dim = |i: usize| arg_int(&args, i, 0).max(0) as usize;
+            numeric::matmul(&args[0], &args[1], dim(2), dim(3), dim(4), args[5].deref().as_bool(), arg_int(&args, 6, 1), h)?
+        }
+        TensorRound => {
+            // a, mode, ndigits, whole, decimal, wrap, threads
+            let mode = RoundMode::from_code(arg_int(&args, 1, 0));
+            let digits: Vec<i128> = match arg_int(&args, 2, 0) {
+                0 => vec![],
+                1 => vec![arg_int(&args, 4, 0)],
+                _ => vec![arg_int(&args, 3, 0), arg_int(&args, 4, 0)],
+            };
+            let spec = RoundSpec::from_args(&digits).map_err(|e| h.throw(ExcKind::IllegalArgument, e))?;
+            numeric::round_all(&args[0], spec, mode, args[5].deref().as_bool(), arg_int(&args, 6, 1), h)?
+        }
+        TensorMigrate => {
+            // a, target type code, mode, threads
+            let to = RtType::decode(&arg_str(&args, 1)).unwrap_or(RtType::Any);
+            let ms = arg_str(&args, 2);
+            let Some(mode) = RoundMode::parse(&ms) else {
+                return Err(h.throw(ExcKind::IllegalArgument, format!("unknown migration method \"{}\" (expected \"round\", \"ceil\" or \"floor\")", ms)));
+            };
+            numeric::migrate_all(&args[0], &to, mode, arg_int(&args, 3, 1), h)?
+        }
+        TensorTranspose => {
+            let dim = |i: usize| arg_int(&args, i, 0).max(0) as usize;
+            numeric::transpose(&args[0], dim(1), dim(2), h)?
+        }
 
         _ => {
             if b.is_mutating() {

@@ -1,0 +1,4 @@
+// error: module 'intrinsics' is internal to the standard library
+using intrinsics as intr
+function void main() {
+}

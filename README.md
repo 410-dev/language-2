@@ -97,6 +97,24 @@ function void main(String[] args) {
 }                                           // "drop file"
 ```
 
+표준 라이브러리 `math.linear`의 텐서·행렬·벡터와 연산자 오버로딩, Python식 포맷 지정자는 다음처럼 씁니다 (사양 6.9, 11.1, 12.2, 14.4).
+
+```
+using stdio as stdio
+using math.linear.Matrix as Matrix
+using math.linear.*                         // Vector, Tensor 등을 단순 이름으로
+
+function void main() {
+    Matrix a = new Matrix([[1, 2], [3, 4]])     // Matrix = Matrix[Float64]
+    Matrix b = a * a.transpose() + 2.0 * Matrix.identity(2)
+    stdio.println(f"{b.determinant():.2f}")     // 행렬식
+    Vector x = b.solve(&new Vector([1.0, 2.0]))
+    a[0, 1] = 9.5                               // operator[]=
+    Matrix[Int32] n = a.migrate[Int32]("floor") // 요소 타입 변환: round(기본) / ceil / floor
+    stdio.println(123.456.round(2, 1))          // 100.5
+}
+```
+
 더 많은 예제는 [`examples/`](examples)와 [`tests/programs/`](tests/programs)에 있습니다.
 
 ## 구조
@@ -104,17 +122,20 @@ function void main(String[] args) {
 ```
 crates/
   l2-runtime/    공유 런타임: 값 모델(Value), BigInt, 연산자, 내장 함수(문자열/배열/Dictionary/stdio)
+    format.rs    Python식 포맷 지정자,  numeric.rs  반올림·타입 변환·텐서 커널(멀티스레드)
   l2-native-rt/  네이티브 실행 파일에 정적 링크되는 C ABI 런타임 (l2-runtime 재사용)
   l2/            컴파일러 라이브러리 + CLI
     lexer.rs     줄바꿈 기반 문장 종결 (사양 3.2)
     parser.rs    재귀 하향 파서 → AST
-    check/       선언 수집, 이름 해석, 타입 검사, 제네릭 단형화 → HIR
+    check/       선언 수집, 패키지·이름 해석, 타입 검사, 제네릭 단형화 → HIR
+                 (oper.rs: 연산자 오버로딩, new, 포맷 필드, 표준 라이브러리 intrinsics)
     flow.rs      이동 후 사용, 확정 할당, 생성자 필드 초기화, 누락 return, 빌림 검사
     hir.rs       세 백엔드가 공유하는 타입 지정·단형화된 중간 표현
     interp.rs    트리 워킹 인터프리터
     bytecode.rs  바이트코드 컴파일러,  vm.rs  가상 머신
     llvm.rs      LLVM IR 생성,  native.rs  opt/llc/링커 구동
-    prelude.l2   예외 계층·Droppable·Comparable (언어 자체로 작성)
+    prelude.l2   예외 계층·Droppable·Comparable·Numeric (언어 자체로 작성)
+  l2/stdlib/     표준 라이브러리 (언어 자체로 작성, 컴파일러에 내장): math/linear/{Tensor,Matrix,Vector}.l2
 tests/
   programs/      차분 테스트 프로그램 (*.l2, 기대 출력 *.out, 선택: *.err, *.in)
   errors/        컴파일 에러 테스트 (첫 줄 `// error: <메시지>`)

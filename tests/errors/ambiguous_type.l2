@@ -1,0 +1,6 @@
+// error: is ambiguous (math.linear.Matrix, geo.shapes.Matrix); write the fully qualified name
+using math.linear.*
+using geo.shapes.*
+function void main() {
+    Matrix m = new Matrix(2, 2)
+}

@@ -1,0 +1,6 @@
+// error: operator method 'operator+' must be public
+public class Point {
+    private function Point operator+(&Point o) { return Point() }
+}
+function void main() {
+}

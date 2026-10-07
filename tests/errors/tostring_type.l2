@@ -1,0 +1,6 @@
+// error: toString() must return String
+public class Point {
+    public function Int64 toString() { return 1 }
+}
+function void main() {
+}

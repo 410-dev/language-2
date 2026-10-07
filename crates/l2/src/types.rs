@@ -57,7 +57,7 @@ impl Type {
     /// Copy types are duplicated on assignment; everything else moves (spec 9.2).
     pub fn is_copy(&self) -> bool {
         match self {
-            Type::Bool | Type::Int(_) | Type::Float(_) | Type::Null | Type::Void | Type::Never | Type::Error => true,
+            Type::Bool | Type::Int(_) | Type::Big | Type::Float(_) | Type::Null | Type::Void | Type::Never | Type::Error => true,
             Type::Nullable(t) => t.is_copy(),
             Type::Union(ts) | Type::Tuple(ts) => ts.iter().all(|t| t.is_copy()),
             Type::Ref(false, _) => true,

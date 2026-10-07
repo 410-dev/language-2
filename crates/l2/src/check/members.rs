@@ -248,6 +248,24 @@ impl<'a> Checker<'a> {
                         let a = self.bargs(args, &[P::Val(Type::int64()), P::Val(Type::int64())], 2, &what, span)?;
                         b(Builtin::NumFormat, with_recv(recv, a), Type::Str)
                     }
+                    // round() / round(decimals) / round(wholeDigits, decimals) (spec 12.2)
+                    "round" | "ceil" | "floor" => {
+                        let a = self.bargs(args, &[P::Val(Type::int64()), P::Val(Type::int64())], 0, &what, span)?;
+                        let bi = match name {
+                            "round" => Builtin::NumRound,
+                            "ceil" => Builtin::NumCeil,
+                            _ => Builtin::NumFloor,
+                        };
+                        let wrap = HExpr::new(H::Lit(Lit::Bool(self.cur_ref().wrap)), Type::Bool, span);
+                        let mut all = vec![recv, wrap];
+                        all.extend(a);
+                        b(bi, all, rty.clone())
+                    }
+                    "abs" => {
+                        self.bargs(args, &[], 0, &what, span)?;
+                        let wrap = HExpr::new(H::Lit(Lit::Bool(self.cur_ref().wrap)), Type::Bool, span);
+                        b(Builtin::NumAbs, vec![recv, wrap], rty.clone())
+                    }
                     "addWrap" | "subWrap" | "mulWrap" => {
                         let a = self.bargs(args, &[P::Val(rty.clone())], 1, &what, span)?;
                         let op = match name {
@@ -585,20 +603,20 @@ impl<'a> Checker<'a> {
     /// `"...%a%...".format(x)` / `f"...".format(x)`: only placeholders that appear in the literal
     /// text are substituted, so interpolated values can never inject placeholders (spec 11.1).
     pub fn literal_format(&mut self, obj: &'a ast::Expr, args: &'a [ast::Arg], span: Span) -> HExpr {
-        let mut segs: Vec<Result<String, &'a ast::Expr>> = Vec::new();
+        let mut segs: Vec<Result<String, &'a ast::FStrPart>> = Vec::new();
         match &obj.kind {
             A::Str(s) => segs.push(Ok(s.clone())),
             A::FStr(parts) => {
                 for p in parts {
                     match p {
                         ast::FStrPart::Lit(s) => segs.push(Ok(s.clone())),
-                        ast::FStrPart::Expr(e) => segs.push(Err(e)),
+                        other => segs.push(Err(other)),
                     }
                 }
             }
             _ => unreachable!(),
         }
-        let total: usize = segs.iter().map(|s| if let Ok(t) = s { l2_runtime::builtins::find_placeholders(t).len() } else { 0 }).sum();
+        let total: usize = segs.iter().map(|s| if let Ok(t) = s { l2_runtime::builtins::find_placeholders_spec(t).len() } else { 0 }).sum();
         if total != args.len() {
             self.err(span, format!("format string has {} placeholder(s) but {} argument(s) were given", total, args.len()));
         }
@@ -608,21 +626,28 @@ impl<'a> Checker<'a> {
         for s in segs {
             match s {
                 Ok(text) => {
-                    let ph = l2_runtime::builtins::find_placeholders(&text);
+                    let ph = l2_runtime::builtins::find_placeholders_spec(&text);
                     let mut last = 0;
-                    for (a, b) in ph {
+                    for (a, b, spec) in ph {
                         out.push(HExpr::new(H::Lit(Lit::Str(text[last..a].to_string())), Type::Str, span));
-                        match argv.pop() {
-                            Some(x) => out.push(x),
-                            None => out.push(HExpr::new(H::Lit(Lit::Str(text[a..b].to_string())), Type::Str, span)),
+                        match (argv.pop(), spec) {
+                            (Some(x), None) => out.push(x),
+                            (Some(x), Some(spec)) => {
+                                // `%name:spec%`: Python's format specification (spec 11.1)
+                                self.check_format_spec(&spec, &x.ty, false, span);
+                                let sp = HExpr::new(H::Lit(Lit::Str(spec)), Type::Str, span);
+                                let conv = HExpr::new(H::Lit(Lit::Str(String::new())), Type::Str, span);
+                                out.push(HExpr::new(H::Builtin(Builtin::FormatValue, vec![x, sp, conv]), Type::Str, span));
+                            }
+                            (None, _) => out.push(HExpr::new(H::Lit(Lit::Str(text[a..b].to_string())), Type::Str, span)),
                         }
                         last = b;
                     }
                     out.push(HExpr::new(H::Lit(Lit::Str(text[last..].to_string())), Type::Str, span));
                 }
-                Err(e) => {
-                    let x = self.expr(e, None);
-                    out.push(x);
+                Err(p) => {
+                    let xs = self.fstr_part(p, span);
+                    out.extend(xs);
                 }
             }
         }

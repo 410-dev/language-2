@@ -122,6 +122,7 @@ function void main(String[] args) {
   - 괄호 `(`, `[`, `{`가 닫히지 않은 경우
   - 줄이 이항 연산자로 끝나는 경우
   - 줄이 쉼표로 끝나는 경우
+- 단, `using pkg.*`의 `*`는 줄을 잇지 않는다.
 
 ### 3.3 리터럴
 | 종류        | 예시                                    |
@@ -249,9 +250,18 @@ function void printAll(List[?] items) { ... }
 
 identity[Int64](5)     // 명시적 타입 인자
 identity(5)            // 타입 추론
+
+public class Tensor[T extends Numeric = Float64] { ... }   // 기본 타입 인자
+Tensor t = ...         // Tensor[Float64]
+t.migrate[Int32]()     // 제네릭 메서드의 명시적 타입 인자
 ```
 - 타입 매개변수는 대괄호로 선언한다. 함수는 이름 뒤, 클래스와 인터페이스는 이름 뒤에 둔다.
 - 제약은 Java처럼 `extends`로 표기한다.
+- `Numeric` 제약: 모든 내장 숫자 타입(`Int8`~`Int64`, `UInt8`~`UInt64`, `IntLarge`, `Float16`~`Float64`)이 만족한다. 클래스는 `Numeric`을 구현할 수 없다. `T extends Numeric`인 코드에서는 `T`에 산술·비교 연산자와 숫자 메서드를 쓸 수 있고, 정수 리터럴을 `T`에 대입할 수 있다 (`T zero = 0`).
+- `Comparable` 제약: 숫자, `String`, `Boolean`, 그리고 `compareTo`를 가진 클래스가 만족한다.
+- 기본 타입 인자 `T = Float64`: 타입 인자를 생략하면 기본값을 쓴다 (`Tensor` = `Tensor[Float64]`). 생성 시에는 명시된 인자 → 기대 타입(`Matrix[Int32] m = new Matrix(...)`) → 리터럴이 아닌 생성자 인자로부터의 추론 → 기본값 순서로 정한다. 리터럴(`[[1, 2]]`, `5`)은 기본값이 있는 타입 매개변수를 정하지 않고 그 타입에 맞춰진다.
+- 제약을 만족하지 않는 타입 인자로는 인스턴스를 만들지 않는다 (컴파일 에러).
+- 제네릭 메서드는 인자에서 타입을 추론하거나, `x.method[T](...)`로 명시한다. 같은 이름의 제네릭 메서드는 매개변수 개수로 구분한다.
 - `[?]` 와일드카드는 이름 없는 타입 매개변수로 처리된다. `printAll(List[?] items)`는 `printAll[T](List[T] items)`와 동일하다.
 - 구현은 단형화(monomorphization) 방식이다. 사용된 타입 인자마다 별도의 코드를 생성한다 (Java의 type erasure와 다름).
 - 대괄호 구분 규칙:
@@ -382,6 +392,29 @@ copied String s = "abcd"
 
 - 비트 연산은 비교보다 먼저 계산된다 (Python, Rust 방식). `x && 1 == 0`은 `(x && 1) == 0`.
 - `**`는 왼쪽의 단항 `-`보다 강하게 결합한다. `-2 ** 2 == -4`. 오른쪽 피연산자에는 단항 연산자가 올 수 있다 (`2 ** -1`).
+
+### 6.9 연산자 오버로딩
+```
+public class Money {
+    public function Money operator+(&Money o) { ... }                 // a + b
+    public function Money operator*(Int64 k) { ... }                  // a * 3
+    public static function Money operator*(Int64 k, &Money m) { ... } // 3 * a
+    public function Money operator-() { ... }                         // -a
+    public function Int64 operator[](Int64 x, Int64 y) { ... }        // a[x, y]
+    public function void operator[]=(Int64 x, Int64 y, Int64 v) { ... } // a[x, y] = v
+}
+```
+- 오버로딩할 수 있는 연산자: `+ - * / % **`, `&& || ^ << >>`, 단항 `-`, `~`, 인덱싱 `[]`, 인덱스 대입 `[]=`.
+- `== != < > <= >=`는 오버로딩하지 않는다. `==`/`!=`는 `equals()`, 크기 비교는 `compareTo()`를 쓴다 (6.2).
+- 연산자 메서드는 `public`이어야 하고 제네릭일 수 없다. 형태:
+  - 이항: 인스턴스 메서드(매개변수 1개 = 오른쪽 피연산자) 또는 정적 메서드(매개변수 2개).
+  - 단항 `-`, `~`: 매개변수 없는 인스턴스 메서드 또는 매개변수 1개인 정적 메서드.
+  - `operator[]`: 인덱스 매개변수 1개 이상, 결과 타입 있음. `operator[]=`: 인덱스 매개변수들과 마지막 값 매개변수, `void`.
+- `a op b`의 해석: 왼쪽 피연산자의 인스턴스 메서드를 먼저 찾고, 맞는 것이 없으면 두 피연산자 클래스의 정적 메서드를 찾는다 (`2.0 * m`). 오버로드 선택 규칙은 일반 메서드와 같다 (8.4). 리터럴 피연산자는 선택된 매개변수 타입에 맞춰진다.
+- `+`의 한쪽이 `String`이면 항상 문자열 연결이다.
+- 인스턴스 연산자 메서드는 가상 호출이다. 인터페이스도 연산자 메서드를 선언할 수 있다.
+- 피연산자 전달은 매개변수 타입을 따른다: `&T`는 빌림, `T`는 소유권 이동 (9장).
+- 복합 대입 `a += b`는 `a = a + b`이다. `a[i, j] += v`는 `operator[]`로 읽고 `operator[]=`로 쓴다 (인덱스는 한 번만 계산).
 
 ---
 
@@ -653,6 +686,7 @@ public class Human extends Animal implements Entity, MovingEntity {
 - 인터페이스는 여러 개 구현할 수 있다 (`implements A, B`).
 - 부모 생성자 호출은 Java와 동일하게 생성자 첫 문장에서 `super(...)`로 한다.
 - 두 인터페이스가 같은 시그니처의 `default` 메서드를 가지면, 클래스에서 명시적으로 해결하지 않는 한 컴파일 에러.
+- 오버라이드하는 메서드는 반환 타입을 하위 클래스(또는 하위 인터페이스) 타입으로 좁힐 수 있다 (공변 반환 타입, Java와 동일). 예) `Tensor.round()`는 `Tensor[T]`, `Matrix.round()`는 `Matrix[T]`.
 ```
   // 특정 인터페이스의 구현에 위임
   @Override
@@ -677,6 +711,7 @@ public interface MovingEntity extends Entity {
 
 ### 10.4 생성자
 - Java 방식: 클래스 이름으로 선언한다 (`public Human(...)`). 반환 타입을 쓰지 않는다.
+- 객체 생성은 `new Human(...)` 또는 `Human(...)`이다 (`new`는 선택). `new` 뒤에는 클래스 이름만 올 수 있고, 패키지 경로와 타입 인자를 쓸 수 있다: `new linear.Matrix(2, 2)`, `new Box[Int64](5)`. 인터페이스와 내장 타입은 `new`로 만들 수 없다.
 - 생성자 종료 시점에 모든 non-null 필드가 초기화되어 있어야 한다. 아니면 컴파일 에러.
 - nullable 필드는 대입하지 않으면 Null로 초기화된다.
 - `Immutable` 필드는 정확히 한 번 대입해야 한다 (nullable 포함).
@@ -702,6 +737,18 @@ String owned = alice.name().clone()   // 소유권 있는 복제본
 ```
 - `setter`와 `Immutable`을 함께 쓰면 컴파일 에러.
 
+### 10.7 `toString` 프로토콜
+```
+public class Point3 extends Point {
+    @Override
+    public function String toString() { return "Point3 of " + super.toString() }
+}
+```
+- 모든 값은 `toString()`(별칭 `string()`)을 가진다. 클래스의 기본 형식은 `Name(field=value, ...)`, 예외는 `Name: message`이다.
+- 클래스는 `public function String toString()`을 선언해 형식을 바꾼다. 상위 클래스에 없더라도 `@Override`를 붙일 수 있다 (Java의 `Object.toString`과 동일). 인자 없는 `toString`이 `String`이 아닌 타입을 반환하면 컴파일 에러.
+- 오버라이드는 동적으로 선택되며, `stdio.println`, 문자열 연결, f-string, 포맷 지정자(11.1), 컨테이너 안의 값 출력, 잡히지 않은 예외 메시지에 모두 쓰인다.
+- `super.toString()`: 상위 클래스의 구현을 호출한다. 상위 클래스들에 구현이 없으면 기본 형식 `Name(field=value, ...)`을 돌려준다.
+
 ---
 
 ## 11. 문자열
@@ -714,6 +761,27 @@ String t = "Hello %str%, you have %number% messages".format(name, count)
 - 처리 순서: f-string 보간 → `.format()` 치환.
 - `.format()`은 원본 리터럴에 있던 `%...%` 자리만 치환한다. f-string으로 보간된 값 안의 `%str%`는 치환되지 않는다 (주입 방지).
 - `.formatWithInjection()`: 보간된 결과 전체에서 자리표시자를 치환한다 (주입을 의도적으로 허용).
+
+**포맷 지정자** (Python의 format specification mini-language)
+```
+f"{pi:.2f}"           // 3.14
+f"{pi:>10.3f}"        // "     3.142"
+f"{1234567.891:,.2f}" // 1,234,567.89
+f"{255:#x} {255:08b}" // 0xff 11111111
+f"{0.256:.1%}"        // 25.6%
+f"{name:^10}"         // 가운데 정렬
+f"{x:{width}.{prec}f}"// 지정자 안의 중첩 필드
+f"{x=}"  f"{x = :.3f}" // 디버그 형식: "x=123.456"
+f"{s!r}"              // 변환: !r (따옴표 붙은 형식), !s (표시 형식)
+"Total: %amount:.2f% for %name%".format(19.5, "Kim")
+```
+- 형식: `[[fill]align][sign][z][#][0][width][grouping][.precision][type]`
+  - align `<` `>` `^` `=`, sign `+` `-` 공백, `z`(음수 0을 양수로), `#`(대체 형식: `0x` 접두사 등), `0`(0 채움), grouping `,` `_`.
+  - type: 정수 `d b o x X c n`, 실수 `f F e E g G n %`, 문자열 `s`. 정수에 실수 type을 쓰면 실수로 변환한다.
+- f-string 필드: `{식}`, `{식:지정자}`, `{식!r}`, `{식!s:지정자}`, `{식=}`. 지정자에는 `{식}` 필드를 중첩할 수 있다. 최상위의 `:`가 지정자를 시작하므로, 삼항 연산자는 `? :`의 짝이 맞으면 그대로 쓸 수 있고 그 외에는 괄호로 감싼다.
+- `.format()` 자리표시자: `%이름%` 또는 `%이름:지정자%` (지정자에 `%`는 쓸 수 없으므로 `%` type은 f-string에서만 쓴다).
+- Python과 다른 점: type 없이 정밀도도 없으면 이 언어의 기본 표시 형식을 쓴다 (`1.0E10`, `NaN`, `true`). `Boolean`은 숫자 type(`d` 등)을 줄 때만 숫자(1/0)로 형식화된다.
+- 리터럴 지정자는 컴파일 시 문법과 값 타입을 검사한다 (`f"{1.5:d}"`는 컴파일 에러). 실행 중 만들어진 지정자가 잘못되면 `IllegalArgumentException`.
 
 ### 11.2 정적 멤버
 | 멤버                                                 | 설명                        |
@@ -760,9 +828,30 @@ String t = "Hello %str%, you have %number% messages".format(name, count)
 | --------------------------------------------- | ---------------------------------------- |
 | `.randomize(start, end)`                      | 무작위 값으로 변경                       |
 | `.format(whole, decimal)`                     | 정수부/소수부 자릿수 포맷, `-1`은 무제한 |
+| `.round()` / `.ceil()` / `.floor()`           | 정수 단위로 반올림 / 올림 / 내림          |
+| `.round(d)` / `.ceil(d)` / `.floor(d)`        | 소수점 `d`자리 단위 (`0`: 정수, `1`: 0.1, `2`: 0.01, 음수 `-2`: 100) |
+| `.round(w, d)` / `.ceil(w, d)` / `.floor(w, d)` | 정수부는 `10^w` 단위, 소수부는 `10^-d` 단위로 각각 처리 |
+| `.abs()`                                      | 절댓값 (오버플로는 파일 정책을 따름)      |
 | `.string()`                                   | 문자열 변환                              |
 | `.castTo(T)`                                  | 명시적 타입 변환                         |
 | `.addWrap(b)` / `.subWrap(b)` / `.mulWrap(b)` | 정책 무관 순환 연산                      |
+
+**반올림 규칙**
+```
+Float64 x = 123.456
+x.round()       // 123.0
+x.round(1)      // 123.5
+x.round(2, 1)   // 100.5   (123 -> 100, 0.456 -> 0.5)
+x.ceil(2, 1)    // 200.5
+x.floor(2, 1)   // 100.4
+2.675.round(2)  // 2.68    (값의 가장 짧은 십진 표현 기준)
+```
+- 결과 타입은 수신 값의 타입과 같다.
+- `round`는 0.5에서 0에서 먼 쪽으로 반올림한다 (`2.5 -> 3`, `-2.5 -> -3`). `ceil`은 +∞ 쪽, `floor`는 -∞ 쪽.
+- 실수는 값을 다시 읽었을 때 같은 값이 되는 가장 짧은 십진 표현을 기준으로 처리하므로 `2.675.round(2)`는 `2.68`이다.
+- `(w, d)` 형태는 정수부와 소수부를 독립적으로 처리한 뒤 더한다. 소수부가 올림되어 1이 되면 정수부에 더해진다 (`6.67.round(1, 0)` = `10 + 1` = `11.0`).
+- `(w, d)`에서 `w`, `d`가 음수이면 `IllegalArgumentException`. 인자는 최대 2개.
+- 정수 타입에서는 정수부 자릿수(`10^w`, 또는 음수 `d`)만 의미가 있다. 결과가 타입 범위를 넘으면 파일의 `IntegerOverflow` 정책을 따른다 (`error`일 때 `ArithmeticException`).
 
 ---
 
@@ -780,6 +869,8 @@ Int64 v = arr[0]       // arr.at(0)
 arr[-1] = 5            // arr.set(-1, 5)
 ```
 - `arr[i]`는 `arr.at(i)`, `arr[i] = v`는 `arr.set(i, v)`의 축약이다.
+- 다차원 인덱싱: `grid[i, j]`는 `grid[i][j]`와 같다. 배열과 Dictionary를 한 단계씩 내려가며, 대입·복합 대입(`grid[i, j] += 1`)도 같다.
+- 클래스 값의 인덱싱은 남은 인덱스를 모두 `operator[]` / `operator[]=`에 넘긴다 (6.9). 예) `m[i, j]`는 `m.operator[](i, j)`.
 
 ### 13.3 배열 메서드
 | 메서드                  | 설명                                         | `Immutable` | `length_immutable` |
@@ -818,8 +909,17 @@ arr[-1] = 5            // arr.set(-1, 5)
 ### 14.1 import
 ```
 using stdio as stdio
+using lib.ping as p                 // 모듈: p.ping(...), 모듈의 클래스
+using math.linear.Matrix as Matrix  // 모듈 math/linear/Matrix.l2 — 별칭은 그 클래스도 가리킨다
+using math.linear.* as linear       // 패키지 별칭: linear.Matrix
+using math.linear as linear         // 위와 같음
+using math.linear.*                 // 패키지의 타입을 단순 이름으로: Matrix, Vector
+using math.linear                   // 위와 같음 (별칭 없는 패키지)
 ```
 - 파일 최상단과 함수 스코프 모두 허용한다. 파일 최상단을 권장한다.
+- 경로 해석 순서: 모듈 파일(`a/b/C.l2`) → 패키지 디렉터리(`a/b/`) → 패키지 안의 타입(`using a.b.Type`). 프로젝트 파일이 표준 라이브러리보다 우선한다.
+- 모듈을 가져오면 그 모듈의 함수(`별칭.f()`)와 그 모듈 패키지의 타입을 쓸 수 있다. 모듈이 자기 이름과 같은 타입을 선언하면 별칭은 그 타입의 이름이기도 하다.
+- `as`가 없는 모듈 import의 별칭은 경로의 마지막 부분이다. `as`가 없는 패키지 import는 패키지의 모든 타입을 단순 이름으로 가져온다.
 - 순환 import는 허용한다. 컴파일러는 모든 모듈의 선언을 먼저 수집한 뒤 본문을 분석한다.
 - 정적 변수 초기화가 순환 참조하는 경우만 컴파일 에러.
 
@@ -829,6 +929,39 @@ using stdio as stdio
 | `stdio.println(s)`                          | 출력 후 줄바꿈              |
 | `stdio.read(prompt)`                        | 프롬프트 출력 후 한 줄 입력 |
 | `stdio.replaceLine(s, lines_from_last = 0)` | 마지막에서 N번째 줄 교체    |
+
+### 14.3 패키지와 이름 해석
+- 패키지는 디렉터리다. `math/linear/Matrix.l2`의 모듈 이름은 `math.linear.Matrix`이고, 그 안의 클래스 `Matrix`의 정규 이름은 `math.linear.Matrix`이다. 엔트리 파일의 디렉터리와 프렐류드는 기본 패키지(이름 없음)다.
+- 이름 있는 패키지의 모듈을 불러오면 같은 패키지의 모듈도 함께 불러오므로, 같은 패키지의 타입끼리는 import 없이 단순 이름으로 참조한다.
+- 단순 타입 이름은 다음 순서로 찾는다: 명시적 import(별칭 포함) → 같은 패키지 → 가져온 패키지/모듈의 패키지 → 기본 패키지와 프렐류드.
+- 가져온 패키지 중 둘 이상에 같은 이름이 있으면 그 단순 이름은 모호하다 (컴파일 에러). 정규 이름(`math.linear.Matrix`) 또는 별칭(`linear.Matrix`)으로 구분한다. 정규 이름은 import 없이도 쓸 수 있다 (해당 모듈이 로드된 경우).
+- 타입 위치(`math.linear.Matrix m`), 생성(`new math.linear.Matrix(2, 2)`, `linear.Matrix(2, 2)`), 정적 멤버(`linear.Matrix.identity(3)`, `Matrix[Int32].identity(3)`) 모두에 정규 이름과 별칭을 쓸 수 있다.
+- 타입 인자 없이 정적 멤버에 접근하면 기대 타입의 타입 인자, 없으면 기본 타입 인자를 쓴다 (`Matrix.identity(3)`은 `Matrix[Float64]`).
+
+### 14.4 표준 라이브러리: `math.linear`
+`Tensor[T extends Numeric = Float64]`, `Matrix[T]`(`Tensor`의 하위 클래스, 2차원), `Vector[T]`(`Tensor`의 하위 클래스, 1차원).
+```
+using math.linear.Matrix as Matrix
+using math.linear.Vector as Vector
+
+Matrix a = new Matrix([[1, 2], [3, 4]])
+Matrix b = a * a.transpose() + 2.0 * Matrix.identity(2)
+Vector x = b.solve(&new Vector([1.0, 2.0]))
+Matrix[Int32] counts = a.migrate[Int32]()          // 기본: 반올림
+Matrix[Float16] half = a.migrate[Float16]("ceil")  // "round" | "ceil" | "floor"
+a[0, 1] = 9.5
+a.forEachRow((Vector row) -> row * 2.0)
+```
+- 데이터는 행 우선(row-major) 1차원 배열로 저장한다. 요소 타입은 모든 내장 숫자 타입이다.
+- **Tensor**: `shape()`, `rank()`, `size()`, `get(idx)`/`set(idx, v)`, `t[i, j, k]`(인덱스 1~4개 또는 `Int64[]`, 음수 인덱스 허용), `reshape`, `flatten`, `toArray`, 정적 `zeros`/`ones`/`full`; 같은 모양끼리 `+ -`, 스칼라와 `+ - * / %`, 단항 `-`, `hadamard`(요소곱), `divide`(요소 나눗셈), `pow`, `abs`, `sum`, `product`, `min`, `max`, `mean`(Float64), `map`.
+- **Matrix**: `*`는 행렬 곱(행렬×행렬, 행렬×벡터), `**`는 정수 거듭제곱, `transpose`, `determinant`(Float64), `inverse`/`solve`(Float64 결과, 특이 행렬은 `ArithmeticException`), `trace`, `row`/`column`/`setRow`/`setColumn`, `rows`/`cols`/`isSquare`, 정적 `identity`/`zeros`/`ones`, `new Matrix(rows, cols)`, `new Matrix(rows, cols, values)`, `new Matrix([[...], ...])`.
+- **Vector**: `dot`, `cross`(3차원), `norm`(Float64), `normalized`(Vector[Float64]), `outer`(Matrix), 행벡터×행렬 `v * m`, `new Vector(n)`, `new Vector([...])`.
+- 연산 결과는 하위 클래스 타입을 유지한다 (`Matrix + Matrix`는 `Matrix`, `Matrix.round()`는 `Matrix`). 모양이 맞지 않으면 `IllegalArgumentException`. 정수 요소의 오버플로는 `ArithmeticException`.
+- **요소별 반올림**: `round()`, `round(d)`, `round(w, d)`와 `ceil`, `floor`는 숫자 메서드(12.2)와 같은 규칙을 모든 요소에 적용한 새 텐서를 돌려준다.
+- **요소 타입 변환** `migrate[U]()` / `migrate[U](method)`: 모든 요소를 `U`로 옮긴 새 텐서를 만든다. 넓히는 변환(`Float32 -> Float64`)은 정확하다. 좁히는 변환은 `method`에 따라 가장 가까운 값(`"round"`, 기본), 위쪽(`"ceil"`), 아래쪽(`"floor"`)의 표현 가능한 값으로 옮긴다 (실수 → 정수, `Float64 -> Float16` 등, 대소문자 무관). 범위를 넘는 정수 변환은 `ArithmeticException`, 알 수 없는 method는 `IllegalArgumentException`.
+- **람다 적용** (제자리 변경): `forEachElement((T) -> T)`, `forEachElement((Int64[] index, T) -> T)`, Matrix의 `forEachElement((Int64 i, Int64 j, T) -> T)`, `forEachRow((Vector[T]) -> Vector[T])` / `forEachRow((Int64, Vector[T]) -> Vector[T])`, `forEachColumn(...)`. 행은 마지막 축을 따르는 1차원 조각, 열은 그 앞 축을 따르는 조각이다 (1차원 텐서는 한 행). 돌려준 벡터의 길이가 다르면 `IllegalArgumentException`.
+- **멀티스레드**: `allowMultithreading`(기본 `false`)과 `maxWorkerThreads`(기본 `0` = 코어 수) 속성으로 제어한다 (`t.allowMultithreading(true).maxWorkerThreads(4)`). 켜면 큰 텐서(약 3만 2천 회 이상의 요소 연산)의 행렬 곱, 요소별 산술, 반올림, 타입 변환을 런타임이 여러 스레드로 나누어 계산한다. 각 결과 요소의 계산 순서가 같으므로 결과와 예외는 스레드 사용 여부와 무관하게 동일하다. 연산 결과는 왼쪽 피연산자의 설정을 물려받는다. 람다(`forEach*`, `map`)는 항상 호출한 스레드에서 순서대로 실행된다.
+- `toString()`은 numpy처럼 열을 맞춘 중첩 대괄호로 출력한다. `==`는 모양과 모든 요소가 같을 때 참이다.
 
 ---
 
@@ -864,7 +997,8 @@ using stdio as stdio
 
 | #    | 항목                                | 비고                                      |
 | ---- | ----------------------------------- | ----------------------------------------- |
-| 1    | 라이브러리 및 패키지 시스템         | 차차 채워 나감                            |
+| 1    | 라이브러리 및 패키지 시스템         | 패키지·import·이름 해석(14.1, 14.3), `math.linear`(14.4) 완료. 외부 라이브러리 배포는 미정 |
 | 2    | 공유 소유권 타입 `Shared[T]`        | 참조 카운팅                               |
 | 3    | Dictionary 키로 사용할 수 있는 타입 | 클래스를 키로 쓸 때의 해시 규칙           |
 | 4    | 표준 라이브러리 전반                | 파일 입출력, 컬렉션(`List` 등), 수학 함수 |
+| 5    | 사용자 정의 `Numeric` 타입           | 연산자 오버로딩한 클래스(복소수 등)를 `Tensor` 요소로 |

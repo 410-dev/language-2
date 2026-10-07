@@ -1,0 +1,15 @@
+@using sdk 1
+
+public class Circle {
+    private getter Float64 r
+    public Circle(Float64 r) {
+        this.r = r
+    }
+    public function Float64 area() {
+        return 3.0 * r * r
+    }
+}
+
+public function String describe(&Circle c) {
+    return f"circle r={c.r()}"
+}

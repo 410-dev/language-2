@@ -11,6 +11,14 @@ pub struct Cand {
     pub names: Vec<String>,
 }
 
+/// An operand of an overloaded operator or index: already checked, or an expression (a literal)
+/// that is typed against the parameter of the selected overload.
+#[derive(Clone)]
+pub enum OArg<'a> {
+    Done(HExpr),
+    Ast(&'a ast::Expr),
+}
+
 pub fn is_literalish(e: &ast::Expr) -> bool {
     match &e.kind {
         A::Int(_) | A::Float(_) | A::Null | A::Dict(_) | A::Lambda { .. } => true,
@@ -165,6 +173,10 @@ impl<'a> Checker<'a> {
         let id = self.lookup_local("this")?;
         let ty = self.local_ty(id);
         Some(HExpr::new(H::Local(id), ty, span))
+    }
+
+    pub fn current_class_pub(&self) -> Option<ClassId> {
+        self.current_class()
     }
 
     fn current_class(&self) -> Option<ClassId> {
@@ -408,16 +420,8 @@ impl<'a> Checker<'a> {
             A::FStr(parts) => {
                 let mut out = Vec::new();
                 for p in parts {
-                    match p {
-                        ast::FStrPart::Lit(s) => out.push(HExpr::new(H::Lit(Lit::Str(s.clone())), Type::Str, span)),
-                        ast::FStrPart::Expr(x) => {
-                            let h = self.expr(x, None);
-                            if h.ty == Type::Void {
-                                self.err(x.span, "cannot interpolate a void expression");
-                            }
-                            out.push(h);
-                        }
-                    }
+                    let xs = self.fstr_part(p, span);
+                    out.extend(xs);
                 }
                 HExpr::new(H::Concat(out), Type::Str, span)
             }
@@ -524,11 +528,44 @@ impl<'a> Checker<'a> {
             }
             A::Lambda { params, ret, body, is_move } => self.lambda(params, ret.as_ref(), body, *is_move, expected, span),
             A::ArrayLit(items) => self.array_literal(items, expected, span),
+            A::New(callee, args) => self.new_expr(callee, args, expected, span),
             A::TypeLit(_) => {
                 self.err(span, "a type is not a value here");
                 HExpr::new(H::Lit(Lit::Null), Type::Error, span)
             }
         }
+    }
+
+    /// One part of an f-string: literal text, `{expr}` or `{expr!conv:spec}` / `{expr=}`.
+    pub fn fstr_part(&mut self, p: &'a ast::FStrPart, span: Span) -> Vec<HExpr> {
+        let mut out = Vec::new();
+        match p {
+            ast::FStrPart::Lit(s) => out.push(HExpr::new(H::Lit(Lit::Str(s.clone())), Type::Str, span)),
+            ast::FStrPart::Expr(x) => {
+                let h = self.expr(x, None);
+                if h.ty == Type::Void {
+                    self.err(x.span, "cannot interpolate a void expression");
+                }
+                out.push(h);
+            }
+            ast::FStrPart::Fmt { expr: x, conv, debug, spec } => {
+                if let Some(d) = debug {
+                    out.push(HExpr::new(H::Lit(Lit::Str(d.clone())), Type::Str, span));
+                }
+                let h = self.expr(x, None);
+                if h.ty == Type::Void {
+                    self.err(x.span, "cannot interpolate a void expression");
+                }
+                // `{x=}` shows the nested (quoted) form unless a specifier is given
+                let conv = match conv {
+                    Some(c) => c.to_string(),
+                    None if debug.is_some() && spec.is_empty() => "r".to_string(),
+                    None => String::new(),
+                };
+                out.push(self.format_field(h, &conv, spec, x.span));
+            }
+        }
+        out
     }
 
     pub fn cond(&mut self, c: HExpr) -> HExpr {
@@ -645,10 +682,11 @@ impl<'a> Checker<'a> {
             self.err(span, format!("'{}' is overloaded or generic and cannot be used as a value here", name));
             return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
         }
-        if self.class_decls.contains_key(name) || self.iface_decls.contains_key(name) || is_builtin_type_name(name) {
+        if matches!(self.find_type(m, name), Ok(Some(_))) || is_builtin_type_name(name) {
             self.err(span, format!("'{}' is a type, not a value", name));
-        } else if self.modules[m].imports.contains_key(name) {
-            self.err(span, format!("'{}' is a module, not a value", name));
+        } else if let Some(imp) = self.modules[m].imports.get(name) {
+            let what = if matches!(imp, Import::Package(_)) { "package" } else { "module" };
+            self.err(span, format!("'{}' is a {}, not a value", name, what));
         } else {
             self.err(span, format!("cannot find '{}' in this scope", name));
         }
@@ -680,6 +718,9 @@ impl<'a> Checker<'a> {
                     return HExpr::new(H::Lit(Lit::Float(v)), ty, span);
                 }
                 let x = self.expr(inner, expected);
+                if self.is_object(&x.ty) {
+                    return self.operator_unary("-", x, span);
+                }
                 if !x.ty.is_numeric() && !x.ty.is_error() {
                     let n = self.tname(&x.ty);
                     self.err(span, format!("unary '-' needs a number, found {}", n));
@@ -702,6 +743,9 @@ impl<'a> Checker<'a> {
             }
             UnOp::BitNot => {
                 let x = self.expr(inner, expected);
+                if self.is_object(&x.ty) {
+                    return self.operator_unary("~", x, span);
+                }
                 if !x.ty.is_integer() && !x.ty.is_error() {
                     let n = self.tname(&x.ty);
                     self.err(span, format!("'~' needs an integer, found {}", n));
@@ -779,15 +823,11 @@ impl<'a> Checker<'a> {
                 None
             }
             A::Member(obj, name) => {
-                if let A::Ident(cn) = &obj.kind {
-                    if self.lookup_local(cn).is_none() {
-                        if let Some(c) = self.class_by_name(cn) {
-                            if let Some(s) = self.find_static(c, name) {
-                                self.check_access(s.access, c, e.span, name);
-                                let ty = self.globals[s.global as usize].ty.clone();
-                                return Some((Place::Global(s.global), ty, !s.immutable, format!("static field '{}' is Immutable", name)));
-                            }
-                        }
+                if let Some(c) = self.static_class_of(obj, None) {
+                    if let Some(s) = self.find_static(c, name) {
+                        self.check_access(s.access, c, e.span, name);
+                        let ty = self.globals[s.global as usize].ty.clone();
+                        return Some((Place::Global(s.global), ty, !s.immutable, format!("static field '{}' is Immutable", name)));
                     }
                 }
                 let o = self.expr(obj, None);
@@ -800,22 +840,34 @@ impl<'a> Checker<'a> {
                 }
                 None
             }
-            A::Index(base, idx) if idx.len() == 1 => {
-                let (bp, bty, mutable, why) = self.place_of(base)?;
-                let (key, ety) = match bty.deref().clone() {
-                    Type::Array(et) => (self.index_arg(&idx[0]), *et),
-                    Type::Dict(kt, vt) => {
-                        let k = self.expr(&idx[0], Some(&kt));
-                        (self.coerce(k, &kt, idx[0].span), *vt)
-                    }
-                    _ => return None,
-                };
-                // nested element places go through a reference to the root storage
-                self.mark_place_root_cell(&bp);
-                Some((Place::Elem(Box::new(bp), Box::new(key)), ety, mutable, why))
+            A::Index(base, idx) if !idx.is_empty() => {
+                // `grid[i, j]` is `grid[i][j]` for nested arrays / dictionaries
+                let (mut bp, mut bty, mutable, why) = self.place_of(base)?;
+                if !matches!(bty.deref(), Type::Array(_) | Type::Dict(_, _)) {
+                    return None;
+                }
+                for ix in idx {
+                    let (key, ety) = match bty.deref().clone() {
+                        Type::Array(et) => (self.index_arg(ix), *et),
+                        Type::Dict(kt, vt) => {
+                            let k = self.expr(ix, Some(&kt));
+                            (self.coerce(k, &kt, ix.span), *vt)
+                        }
+                        _ => return None,
+                    };
+                    // nested element places go through a reference to the root storage
+                    self.mark_place_root_cell(&bp);
+                    bp = Place::Elem(Box::new(bp), Box::new(key));
+                    bty = ety;
+                }
+                Some((bp, bty, mutable, why))
             }
             _ => None,
         }
+    }
+
+    pub fn mark_place_root_cell_pub(&mut self, p: &Place) {
+        self.mark_place_root_cell(p)
     }
 
     fn mark_place_root_cell(&mut self, p: &Place) {
@@ -914,16 +966,27 @@ impl<'a> Checker<'a> {
                 HExpr::new(k, Type::Bool, span)
             }
             _ => {
+                // objects: overloaded operators (spec 6.9); comparisons keep equals/compareTo
+                let overloadable = !matches!(op, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge);
                 // evaluate the non-literal side first so literals adapt to it
                 let (x, y) = if is_literalish(a) && !is_literalish(b) {
                     let y = self.expr(b, None);
+                    if overloadable && self.is_object(&y.ty) {
+                        return self.operator_binary(op, OArg::Ast(a), OArg::Done(y), span);
+                    }
                     let yt = y.ty.clone();
                     let x = self.expr(a, Some(&yt));
                     (x, y)
                 } else if !is_literalish(a) {
                     let x = self.expr(a, None);
+                    if overloadable && self.is_object(&x.ty) {
+                        return self.operator_binary(op, OArg::Done(x), OArg::Ast(b), span);
+                    }
                     let xt = x.ty.clone();
                     let y = if matches!(op, BinOp::Shl | BinOp::Shr) { self.expr(b, None) } else { self.expr(b, Some(&xt)) };
+                    if overloadable && self.is_object(&y.ty) {
+                        return self.operator_binary(op, OArg::Done(x), OArg::Done(y), span);
+                    }
                     (x, y)
                 } else {
                     let exp = expected.filter(|t| t.is_numeric());
@@ -954,6 +1017,11 @@ impl<'a> Checker<'a> {
         let (xt, yt) = (x.ty.deref().clone(), y.ty.deref().clone());
         if xt.is_error() || yt.is_error() {
             return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
+        }
+        let overloadable = !matches!(op, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge | BinOp::And | BinOp::Or);
+        let concat = op == BinOp::Add && (xt == Type::Str || yt == Type::Str);
+        if overloadable && !concat && (self.is_object(&xt) || self.is_object(&yt)) {
+            return self.operator_binary(op, OArg::Done(x), OArg::Done(y), span);
         }
         let arith = |op: BinOp| match op {
             BinOp::Add => Some(ArithOp::Add),
@@ -1154,33 +1222,40 @@ impl<'a> Checker<'a> {
 
     fn index(&mut self, base: &'a ast::Expr, idx: &'a [ast::Expr], span: Span) -> HExpr {
         if let A::Ident(n) = &base.kind {
-            if self.lookup_local(n).is_none() && (self.class_decls.contains_key(n) || self.lookup_funcs(self.current_module(), n).is_some()) {
+            let m = self.current_module();
+            if self.lookup_local(n).is_none() && (matches!(self.find_type(m, n), Ok(Some(_))) || self.lookup_funcs(m, n).is_some()) {
                 self.err(span, format!("type arguments for '{}' must be followed by a call", n));
                 return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
             }
         }
-        let b = self.expr(base, None);
-        if idx.len() != 1 {
-            self.err(span, "expected exactly one index");
+        if idx.is_empty() {
+            self.err(span, "expected an index");
             return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
         }
-        match b.ty.deref().clone() {
-            Type::Array(et) => {
-                let i = self.index_arg(&idx[0]);
-                HExpr::new(H::Builtin(Builtin::ArrAt, vec![b, i]), *et, span)
-            }
-            Type::Dict(kt, vt) => {
-                let k = self.expr(&idx[0], Some(&kt));
-                let k = self.coerce(k, &kt, idx[0].span);
-                HExpr::new(H::Builtin(Builtin::DictGet, vec![b, k]), *vt, span)
-            }
-            Type::Error => b,
-            other => {
-                let n = self.tname(&other);
-                self.err(span, format!("type {} cannot be indexed", n));
-                HExpr::new(H::Lit(Lit::Null), Type::Error, span)
-            }
+        let mut cur = self.expr(base, None);
+        // `a[i, j]` indexes nested arrays / dictionaries one level per index; an object takes all
+        // remaining indices through its `operator[]`
+        for (i, ix) in idx.iter().enumerate() {
+            cur = match cur.ty.deref().clone() {
+                Type::Array(et) => {
+                    let k = self.index_arg(ix);
+                    HExpr::new(H::Builtin(Builtin::ArrAt, vec![cur, k]), *et, span)
+                }
+                Type::Dict(kt, vt) => {
+                    let k = self.expr(ix, Some(&kt));
+                    let k = self.coerce(k, &kt, ix.span);
+                    HExpr::new(H::Builtin(Builtin::DictGet, vec![cur, k]), *vt, span)
+                }
+                Type::Class(_) | Type::Iface(_) => return self.operator_index(cur, &idx[i..], span),
+                Type::Error => return cur,
+                other => {
+                    let n = self.tname(&other);
+                    self.err(span, format!("type {} cannot be indexed", n));
+                    return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
+                }
+            };
         }
+        cur
     }
 
     pub fn index_arg(&mut self, a: &'a ast::Expr) -> HExpr {
@@ -1195,18 +1270,19 @@ impl<'a> Checker<'a> {
     }
 
     fn member(&mut self, obj: &'a ast::Expr, name: &str, span: Span) -> HExpr {
-        // static access: Class.field / Type.CONST
+        // static access: Class.field / pkg.Class.field / Type.CONST
+        if let Some(c) = self.static_class_of(obj, None) {
+            if let Some(s) = self.find_static(c, name) {
+                self.check_access(s.access, c, span, name);
+                let ty = self.globals[s.global as usize].ty.clone();
+                return HExpr::new(H::Global(s.global), ty, span);
+            }
+            let cn = self.classes[c as usize].name.clone();
+            self.err(span, format!("class '{}' has no static field '{}'", cn, name));
+            return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
+        }
         if let A::Ident(cn) = &obj.kind {
             if self.lookup_local(cn).is_none() {
-                if let Some(c) = self.class_by_name(cn) {
-                    if let Some(s) = self.find_static(c, name) {
-                        self.check_access(s.access, c, span, name);
-                        let ty = self.globals[s.global as usize].ty.clone();
-                        return HExpr::new(H::Global(s.global), ty, span);
-                    }
-                    self.err(span, format!("class '{}' has no static field '{}'", cn, name));
-                    return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
-                }
                 if is_builtin_type_name(cn) {
                     if let Some(e) = self.builtin_static_const(cn, name, span) {
                         return e;
@@ -1470,6 +1546,14 @@ impl<'a> Checker<'a> {
         }
     }
 
+    pub fn literal_fits_pub(&self, e: &ast::Expr, p: &Type) -> bool {
+        self.literal_fits(e, p)
+    }
+
+    pub fn arg_expr_pub(&mut self, e: &'a ast::Expr) -> HExpr {
+        self.arg_expr(e)
+    }
+
     fn literal_fits(&self, e: &ast::Expr, p: &Type) -> bool {
         let p = p.deref();
         match &e.kind {
@@ -1484,6 +1568,11 @@ impl<'a> Checker<'a> {
             A::Dict(_) => matches!(p.non_null(), Type::Dict(_, _) | Type::Dyn),
             A::Lambda { params, .. } => matches!(p, Type::Func(ps, _) if ps.len() == params.len()),
             A::Tuple(items) => matches!(p, Type::Tuple(ts) if ts.len() == items.len()),
+            A::ArrayLit(items) => match p.non_null() {
+                Type::Array(et) => items.iter().all(|i| !is_literalish(i) || self.literal_fits(i, &et)),
+                Type::Dyn => true,
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -1505,37 +1594,8 @@ impl<'a> Checker<'a> {
         match &callee.kind {
             A::Ident(name) => self.call_ident(name, args, expected, span),
             A::Index(base, targs) => {
-                if let A::Ident(name) = &base.kind {
-                    if self.lookup_local(name).is_none() {
-                        let mut tys = Vec::new();
-                        let module = self.current_module();
-                        let subst = self.cur_ref().subst.clone();
-                        for t in targs {
-                            match crate::parser::expr_to_type(t) {
-                                Some(te) => tys.push(self.resolve_type(&te, module, &subst)),
-                                None => {
-                                    self.err(t.span, "expected a type argument");
-                                    return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
-                                }
-                            }
-                        }
-                        if self.class_decls.contains_key(name) {
-                            return match self.instantiate_class(name, tys, span) {
-                                Some(c) => self.construct(c, args, span),
-                                None => HExpr::new(H::Lit(Lit::Null), Type::Error, span),
-                            };
-                        }
-                        if let Some(fs) = self.lookup_funcs(module, name) {
-                            let generic: Vec<FnRef<'a>> = fs.into_iter().filter(|f| f.func.is_none()).collect();
-                            if generic.len() == 1 {
-                                let fr = generic[0].clone();
-                                if let Some(fid) = self.instantiate_generic(&fr, tys, span) {
-                                    return self.call_func(fid, args, span);
-                                }
-                                return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
-                            }
-                        }
-                    }
+                if let Some(e) = self.call_with_type_args(callee, base, targs, args, span) {
+                    return e;
                 }
                 let f = self.expr(callee, None);
                 self.call_value(f, args, span)
@@ -1612,19 +1672,13 @@ impl<'a> Checker<'a> {
         if let Some(fs) = self.lookup_funcs(module, name) {
             return self.call_overloads(fs, args, span, name);
         }
-        if self.class_decls.contains_key(name) {
-            let (_, decl) = self.class_decls[name];
-            if decl.type_params.is_empty() {
-                let c = self.class_by_name(name).unwrap();
-                return self.construct(c, args, span);
+        match self.lookup_type(module, name, span) {
+            Some(TypeRef::Class(f)) => return self.construct_named(&f, None, args, expected, span),
+            Some(TypeRef::Iface(_)) => {
+                self.err(span, format!("interface '{}' cannot be instantiated", name));
+                return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
             }
-            // infer generic class arguments from the expected type
-            if let Some(Type::Class(c)) = expected.map(|t| t.deref().non_null()) {
-                if self.cmeta[c as usize].template == name {
-                    return self.construct(c, args, span);
-                }
-            }
-            return self.construct_generic_inferred(name, args, span);
+            None => {}
         }
         if name == "free" {
             return self.free_call(args, span);
@@ -1688,7 +1742,7 @@ impl<'a> Checker<'a> {
         let mut pre = Vec::new();
         for (a, p) in args.iter().zip(decl_params.iter()) {
             let x = self.arg_expr(&a.value);
-            self.unify(&p.ty, &x.ty, &names, &mut bind);
+            self.unify(&p.ty, &x.ty, &names, &mut bind, fr.module);
             pre.push(x);
         }
         let mut targs = Vec::new();
@@ -1719,7 +1773,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Binds type parameters by matching a parameter type expression against an argument type.
-    pub fn unify(&mut self, te: &TypeExpr, ty: &Type, names: &[String], bind: &mut Subst) {
+    pub fn unify(&mut self, te: &TypeExpr, ty: &Type, names: &[String], bind: &mut Subst, module: usize) {
         let ty = ty.deref();
         match te {
             TypeExpr::Named { name, args, .. } => {
@@ -1731,84 +1785,97 @@ impl<'a> Checker<'a> {
                 }
                 if name == "Dictionary" && args.len() == 2 {
                     if let Type::Dict(k, v) = ty {
-                        self.unify(&args[0], k, names, bind);
-                        self.unify(&args[1], v, names, bind);
+                        self.unify(&args[0], k, names, bind, module);
+                        self.unify(&args[1], v, names, bind, module);
                     }
                     return;
                 }
-                if let Type::Class(c) = ty {
-                    if self.cmeta[*c as usize].template == *name {
-                        let targs = self.cmeta[*c as usize].targs.clone();
+                let fqn = self.find_type(module, name).ok().flatten();
+                // walk up to the instance of the named generic class (a Matrix[T] is a Tensor[T])
+                let mut cur = if let Type::Class(c) = ty { Some(*c) } else { None };
+                while let Some(c) = cur {
+                    if Some(&self.cmeta[c as usize].template) == fqn.as_ref() {
+                        let targs = self.cmeta[c as usize].targs.clone();
                         for (a, t) in args.iter().zip(targs.iter()) {
-                            self.unify(a, t, names, bind);
+                            self.unify(a, t, names, bind, module);
                         }
+                        break;
                     }
+                    cur = self.classes[c as usize].parent;
                 }
                 if let Type::Iface(i) = ty {
-                    if self.imeta[*i as usize].template == *name {
+                    if Some(&self.imeta[*i as usize].template) == fqn.as_ref() {
                         let targs = self.imeta[*i as usize].targs.clone();
                         for (a, t) in args.iter().zip(targs.iter()) {
-                            self.unify(a, t, names, bind);
+                            self.unify(a, t, names, bind, module);
                         }
                     }
                 }
             }
             TypeExpr::Array(e) => {
                 if let Type::Array(t) = ty {
-                    self.unify(e, t, names, bind);
+                    self.unify(e, t, names, bind, module);
                 }
             }
-            TypeExpr::Nullable(e) => self.unify(e, &ty.non_null(), names, bind),
-            TypeExpr::Ref { inner, .. } => self.unify(inner, ty, names, bind),
+            TypeExpr::Nullable(e) => self.unify(e, &ty.non_null(), names, bind, module),
+            TypeExpr::Ref { inner, .. } => self.unify(inner, ty, names, bind, module),
             TypeExpr::Tuple(es) => {
                 if let Type::Tuple(ts) = ty {
                     for (e, t) in es.iter().zip(ts.iter()) {
-                        self.unify(e, t, names, bind);
+                        self.unify(e, t, names, bind, module);
                     }
                 }
             }
             TypeExpr::Func(ps, r) => {
                 if let Type::Func(tps, tr) = ty {
                     for (e, t) in ps.iter().zip(tps.iter()) {
-                        self.unify(e, t, names, bind);
+                        self.unify(e, t, names, bind, module);
                     }
-                    self.unify(r, tr, names, bind);
+                    self.unify(r, tr, names, bind, module);
                 }
             }
             _ => {}
         }
     }
 
-    fn construct_generic_inferred(&mut self, name: &str, args: &'a [ast::Arg], span: Span) -> HExpr {
-        let (_, decl) = self.class_decls[name];
+    pub fn construct_generic_inferred(&mut self, fqn: &str, args: &'a [ast::Arg], span: Span) -> HExpr {
+        let (module, decl) = self.class_decls[fqn];
         let names: Vec<String> = decl.type_params.iter().map(|t| t.name.clone()).collect();
-        let ctor = decl.ctors.iter().find(|c| c.params.len() == args.len());
-        let Some(ctor) = ctor else {
-            self.err(span, format!("cannot infer type arguments of '{}'; write {}[...](...)", name, name));
-            return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
-        };
         let mut bind = Subst::new();
-        for (a, p) in args.iter().zip(ctor.params.iter()) {
-            if is_literalish(&a.value) && !matches!(a.value.kind, A::Int(_) | A::Float(_)) {
-                continue;
+        // literals adapt to their parameter: with defaults (`T = Float64`) they do not choose T
+        let has_defaults = decl.type_params.iter().any(|t| t.default.is_some());
+        // the first constructor of matching arity whose parameters bind type arguments
+        for ctor in decl.ctors.iter().filter(|c| c.params.len() == args.len()) {
+            let mut b = Subst::new();
+            for (a, p) in args.iter().zip(ctor.params.iter()) {
+                if is_literalish(&a.value) && (has_defaults || !matches!(a.value.kind, A::Int(_) | A::Float(_))) {
+                    continue;
+                }
+                // type the argument in a throw-away way only for simple expressions
+                let x = self.expr_probe(&a.value);
+                if let Some(t) = x {
+                    self.unify(&p.ty, &t, &names, &mut b, module);
+                }
             }
-            // type the argument in a throw-away way only for simple expressions
-            let x = self.expr_probe(&a.value);
-            if let Some(t) = x {
-                self.unify(&p.ty, &t, &names, &mut bind);
+            if !b.is_empty() {
+                bind = b;
+                break;
             }
         }
+        // parameters that cannot be inferred take their defaults (`T extends Numeric = Float64`)
         let mut targs = Vec::new();
-        for n in &names {
+        for (tp, n) in decl.type_params.iter().zip(names.iter()) {
             match bind.get(n) {
                 Some(t) => targs.push(t.clone()),
+                None if tp.default.is_some() => break,
                 None => {
-                    self.err(span, format!("cannot infer type argument '{}' of '{}'; write {}[...](...)", n, name, name));
+                    self.err(span, format!("cannot infer type argument '{}' of '{}'; write {}[...](...)", n, decl.name, decl.name));
                     return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
                 }
             }
         }
-        match self.instantiate_class(name, targs, span) {
+        let targs = self.complete_targs(fqn, targs);
+        match self.instantiate_class(fqn, targs, span) {
             Some(c) => self.construct(c, args, span),
             None => HExpr::new(H::Lit(Lit::Null), Type::Error, span),
         }
@@ -1868,6 +1935,11 @@ impl<'a> Checker<'a> {
             return HExpr::new(H::Lit(Lit::Null), ms[0].ret.clone(), span);
         };
         let m = ms[i].clone();
+        self.emit_method(&m, recv, out, span, direct)
+    }
+
+    /// Emits a call of a selected method (`recv` is `None` for static calls).
+    pub fn emit_method(&mut self, m: &MethodInfo, recv: Option<HExpr>, out: Vec<HExpr>, span: Span, direct: bool) -> HExpr {
         if let Owner::Class(oc) = m.owner {
             self.check_access(m.access, oc, span, &m.name);
         }
@@ -1898,6 +1970,16 @@ impl<'a> Checker<'a> {
     }
 
     fn invoke_generic_method(&mut self, gs: Vec<MethodInfo>, recv: Option<HExpr>, args: &'a [ast::Arg], span: Span) -> HExpr {
+        let gs = if gs.len() > 1 {
+            let fit: Vec<MethodInfo> = gs.iter().filter(|m| m.param_names.len() == args.len()).cloned().collect();
+            if fit.is_empty() {
+                gs
+            } else {
+                fit
+            }
+        } else {
+            gs
+        };
         if gs.len() > 1 {
             self.err(span, format!("overloaded generic methods '{}' are not supported", gs[0].name));
             return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
@@ -1917,9 +1999,10 @@ impl<'a> Checker<'a> {
         }
         let mut bind = Subst::new();
         let mut pre = Vec::new();
+        let module = self.cmeta[c as usize].module;
         for (a, p) in args.iter().zip(decl_params.iter()) {
             let x = self.arg_expr(&a.value);
-            self.unify(&p.ty, &x.ty, &names, &mut bind);
+            self.unify(&p.ty, &x.ty, &names, &mut bind, module);
             pre.push(x);
         }
         let mut targs = Vec::new();
@@ -1927,7 +2010,7 @@ impl<'a> Checker<'a> {
             match bind.get(n) {
                 Some(t) => targs.push(t.clone()),
                 None => {
-                    self.err(span, format!("cannot infer type argument '{}' of method '{}'", n, d.name));
+                    self.err(span, format!("cannot infer type argument '{}' of method '{}'; give it explicitly: x.{}[...](...)", n, d.name, d.name));
                     return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
                 }
             }
@@ -1985,6 +2068,10 @@ impl<'a> Checker<'a> {
                 }
             };
             if ms.is_empty() {
+                if name == "toString" && args.is_empty() && which.is_none() {
+                    // the inherited default `Name(field=value, ...)` form (spec 10.7)
+                    return HExpr::new(H::Builtin(Builtin::DefaultToString, vec![this]), Type::Str, span);
+                }
                 self.err(span, format!("no inherited method '{}' to call", name));
                 return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
             }
@@ -1994,43 +2081,41 @@ impl<'a> Checker<'a> {
             if self.lookup_local(n).is_none() {
                 let module = self.current_module();
                 // module-qualified call
-                if let Some(imp) = self.modules[module].imports.get(n).copied() {
+                if let Some(imp) = self.modules[module].imports.get(n).cloned() {
                     if self.current_class().and_then(|c| self.field_index(c, n)).is_none() {
                         return match imp {
                             Import::Stdio => self.stdio_call(name, args, span),
+                            Import::Intrinsics => self.intrinsic_call(name, None, args, span),
                             Import::Module(mi) => {
+                                let ty = qualify(&self.modules[mi].package, name);
                                 if let Some(fs) = self.lookup_funcs(mi, name) {
                                     let fs: Vec<FnRef<'a>> = fs;
                                     self.call_overloads(fs, args, span, name)
-                                } else if let Some(c) = self.class_by_name(name) {
-                                    self.construct(c, args, span)
+                                } else if self.class_decls.contains_key(&ty) {
+                                    self.construct_named(&ty, None, args, expected, span)
+                                } else if let Some(c) = self.static_class_of(obj, expected) {
+                                    // the alias also names the module's class: a static method
+                                    self.static_call(c, name, args, span)
                                 } else {
                                     self.err(span, format!("module '{}' has no function '{}'", n, name));
+                                    HExpr::new(H::Lit(Lit::Null), Type::Error, span)
+                                }
+                            }
+                            Import::Package(p) => {
+                                let ty = qualify(&p, name);
+                                if self.class_decls.contains_key(&ty) {
+                                    self.construct_named(&ty, None, args, expected, span)
+                                } else {
+                                    self.err(span, format!("package '{}' has no class '{}'", p, name));
                                     HExpr::new(H::Lit(Lit::Null), Type::Error, span)
                                 }
                             }
                         };
                     }
                 }
-                // static method call on a class
-                if self.class_decls.contains_key(n) && self.current_class().and_then(|c| self.field_index(c, n)).is_none() {
-                    let nparams = self.class_decls[n].1.type_params.len();
-                    let inst = if nparams == 0 { self.class_by_name(n) } else { self.instantiate_class(n, vec![Type::Dyn; nparams], span) };
-                    if let Some(c) = inst {
-                        let ms: Vec<MethodInfo> = self.lookup_methods(Owner::Class(c), name).into_iter().filter(|m| m.is_static).collect();
-                        if ms.is_empty() {
-                            if name == "array" {
-                                return self.array_new(Type::Class(c), args, span);
-                            }
-                            self.err(span, format!("class '{}' has no static method '{}'", n, name));
-                            return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
-                        }
-                        return self.invoke_methods(ms, None, args, span, true);
-                    }
-                }
-                if self.iface_decls.contains_key(n) {
-                    let nparams = self.iface_decls[n].1.type_params.len();
-                    let inst = if nparams == 0 { self.iface_inst.get(&(n.to_string(), vec![])).copied() } else { self.instantiate_iface(n, vec![Type::Dyn; nparams], span) };
+                if let Some(TypeRef::Iface(f)) = self.lookup_type(module, n, span) {
+                    let nparams = self.iface_decls[&f].1.type_params.len();
+                    let inst = self.instantiate_iface(&f, vec![Type::Dyn; nparams], span);
                     if let Some(i) = inst {
                         let ms: Vec<MethodInfo> = self.lookup_methods(Owner::Iface(i), name).into_iter().filter(|m| m.is_static).collect();
                         if !ms.is_empty() {
@@ -2043,6 +2128,21 @@ impl<'a> Checker<'a> {
                 }
                 if is_builtin_type_name(n) {
                     return self.builtin_static_call(n, name, args, expected, span);
+                }
+            }
+        }
+        // static method call on a class: `Matrix.identity(3)`, `linear.Matrix.identity(3)`,
+        // `Matrix[Int32].identity(3)`
+        if let Some(c) = self.static_class_of(obj, expected) {
+            return self.static_call(c, name, args, span);
+        }
+        // `math.linear.Matrix(2, 2)`: a fully qualified class used as a constructor
+        if let Some(path) = self.type_path_of(obj) {
+            let full = format!("{}.{}", path, name);
+            let module = self.current_module();
+            if let Ok(Some(f)) = self.find_type(module, &full) {
+                if self.class_decls.contains_key(&f) {
+                    return self.construct_named(&f, None, args, expected, span);
                 }
             }
         }
@@ -2066,7 +2166,8 @@ impl<'a> Checker<'a> {
         if name == "array" {
             if let A::Index(base, _) = &obj.kind {
                 if let A::Ident(bn) = &base.kind {
-                    let is_type = bn == "Function" || bn == "Dictionary" || self.class_decls.contains_key(bn) || self.iface_decls.contains_key(bn);
+                    let module = self.current_module();
+                    let is_type = bn == "Function" || bn == "Dictionary" || matches!(self.find_type(module, bn), Ok(Some(_)));
                     if is_type && self.lookup_local(bn).is_none() {
                         if let Some(te) = crate::parser::expr_to_type(obj) {
                             let module = self.current_module();
@@ -2114,8 +2215,13 @@ impl<'a> Checker<'a> {
             Type::Error => return recv,
             _ => {}
         }
+        let nd = self.diags.len();
         if let Some(e) = self.builtin_method(obj, recv.clone(), name, args, expected, span) {
             return e;
+        }
+        if self.diags.len() > nd {
+            // the builtin method exists; its arguments were already reported
+            return HExpr::new(H::Lit(Lit::Null), Type::Error, span);
         }
         let n = self.tname(&rty);
         self.err(span, format!("type {} has no method '{}'", n, name));

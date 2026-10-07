@@ -1,0 +1,114 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+using stdio as stdio
+
+// spec 6.9 operator overloading, 10.4 `new`, 10.7 toString, 13.2 multi-dimensional indexing
+
+public class Money {
+    private getter Int64 cents
+    public Money(Int64 cents) { this.cents = cents }
+    public function Money operator+(&Money o) { return new Money(cents + o.cents) }
+    public function Money operator-(&Money o) { return new Money(cents - o.cents) }
+    public function Money operator*(Int64 k) { return new Money(cents * k) }
+    public static function Money operator*(Int64 k, &Money m) { return new Money(k * m.cents) }
+    public function Money operator-() { return new Money(-cents) }
+    public function Int32 compareTo(&Money o) { return cents.compareTo(o.cents) }
+    @Override
+    public function String toString() {
+        String sign = cents < 0 ? "-" : ""
+        Int64 a = cents.abs()
+        return f"{sign}${a / 100}.{a % 100:02d}"
+    }
+}
+
+public class Grid {
+    private Int64[] cells
+    private Int64 w
+    public Grid(Int64 w, Int64 h) {
+        this.w = w
+        this.cells = Int64.array(w * h, true)
+    }
+    public function Int64 operator[](Int64 x, Int64 y) { return cells[y * w + x] }
+    public function void operator[]=(Int64 x, Int64 y, Int64 v) { cells[y * w + x] = v }
+}
+
+public interface Shape {
+    public function Float64 area()
+    public function Shape operator*(Float64 k)
+}
+
+public class Square implements Shape {
+    private Float64 side
+    public Square(Float64 side) { this.side = side }
+    public function Float64 area() { return side * side }
+    public function Shape operator*(Float64 k) { return new Square(side * k) }
+}
+
+public class Animal {
+    public function Animal me() { return new Animal() }
+}
+
+public class Dog extends Animal {
+    // covariant return type
+    @Override
+    public function Dog me() { return new Dog() }
+    public function String bark() { return "woof" }
+}
+
+public class Point {
+    private Int64 x = 1
+    private Int64 y = 2
+}
+
+public class Point3 extends Point {
+    private Int64 z = 3
+    @Override
+    public function String toString() { return "Point3 of " + super.toString() }
+}
+
+public class Bag {
+    private Int64[] items = [1, 2]
+    // an owned right operand is moved into the operator
+    public function Bag operator+(Bag other) { return other }
+}
+
+function void main() {
+    Money a = new Money(1250)
+    Money b = Money(199)
+    stdio.println(a + b)
+    stdio.println(a - b * 2)
+    stdio.println(3 * b)
+    stdio.println(-a)
+    stdio.println(a > b)
+    a += b
+    a *= 2
+    stdio.println(f"a={a} [{a:>10}] [{a:<10}]")
+
+    Grid g = new Grid(3, 2)
+    g[1, 1] = 5
+    g[1, 1] += 10
+    g[2, 0] -= 1
+    stdio.println(f"{g[1, 1]} {g[2, 0]} {g[0, 0]}")
+
+    Int64[][] grid = [[1, 2, 3], [4, 5, 6]]
+    grid[1, 2] = 60
+    grid[0, 0] += 100
+    stdio.println(f"{grid[1, 2]} {grid[0, 0]} {grid[-1, -1]} {grid}")
+    Dictionary[String, Int64[]] d = {"a": [1, 2, 3]}
+    d["a", 1] = 20
+    stdio.println(f"{d["a", 1]} {d}")
+
+    Shape s = new Square(2.0)
+    stdio.println((s * 3.0).area())
+
+    Animal pet = new Dog()
+    stdio.println(f"{new Dog().me().bark()} {pet.me().isSameReferenceWith(pet)}")
+
+    stdio.println(new Point3())
+    stdio.println(f"{new Point()}")
+
+    Bag p = Bag()
+    Bag q = Bag()
+    Bag r = p + q
+    stdio.println(r)
+}

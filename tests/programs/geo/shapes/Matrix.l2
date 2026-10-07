@@ -1,0 +1,9 @@
+@using sdk 1
+
+// A class whose simple name clashes with math.linear.Matrix (spec 14.3).
+public class Matrix {
+    @Override
+    public function String toString() {
+        return "geo matrix"
+    }
+}

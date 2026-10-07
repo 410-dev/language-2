@@ -1,0 +1,5 @@
+// error: Float64.round takes 0 to 2 argument(s) but 3 were given
+function void main() {
+    Float64 x = 1.5
+    Float64 y = x.round(1, 2, 3)
+}

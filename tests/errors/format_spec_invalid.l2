@@ -1,0 +1,4 @@
+// error: invalid format specifier '.2q'
+function void main() {
+    String s = f"{1.5:.2q}"
+}

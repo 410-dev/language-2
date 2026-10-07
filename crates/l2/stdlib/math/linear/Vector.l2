@@ -1,0 +1,230 @@
+@using sdk 1
+
+// math.linear.Vector: a rank-1 tensor with linear algebra semantics (spec 14.4).
+
+using intrinsics as intr
+
+public class Vector[T extends Numeric = Float64] extends Tensor[T] {
+    // A zero vector of length n.
+    public Vector(Int64 n) {
+        super([n])
+    }
+
+    // A vector holding `values`.
+    public Vector(T[] values) {
+        super([values.length()], values)
+    }
+
+    // a vector of this vector's settings
+    protected function Vector[T] make(T[] values) {
+        Vector[T] v = new Vector[T](values)
+        v.copySettings(this)
+        return v
+    }
+
+    public static function Vector[T] zeros(Int64 n) {
+        return new Vector[T](n)
+    }
+
+    public static function Vector[T] ones(Int64 n) {
+        Vector[T] v = new Vector[T](n)
+        T one = 1
+        v.data.fill(one)
+        return v
+    }
+
+    public function Int64 length() {
+        return data.length()
+    }
+
+    protected function void requireSameLength(&Vector[T] other, String op) {
+        if (data.length() != other.data.length()) {
+            throw IllegalArgumentException(f"{op}: vectors of length {data.length()} and {other.data.length()}")
+        }
+    }
+
+    // ------------------------------------------------------------------ linear algebra
+    public function T dot(&Vector[T] other) {
+        requireSameLength(other, "dot")
+        T acc = 0
+        for (i, x in data.kv()) {
+            acc += x * other.data[i]
+        }
+        return acc
+    }
+
+    // cross product of 3-dimensional vectors
+    public function Vector[T] cross(&Vector[T] other) {
+        if (data.length() != 3 or other.data.length() != 3) {
+            throw IllegalArgumentException("cross product needs two vectors of length 3")
+        }
+        T[] a = data.clone()
+        T[] b = other.data.clone()
+        return make([a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]])
+    }
+
+    // Euclidean length
+    public function Float64 norm() {
+        Float64 acc = 0.0
+        for (x in data) {
+            Float64 f = x.castTo(Float64)
+            acc += f * f
+        }
+        return acc ** 0.5
+    }
+
+    // this vector scaled to length 1 (in Float64)
+    public function Vector[Float64] normalized() {
+        Float64 n = norm()
+        if (n == 0.0) {
+            throw ArithmeticException("cannot normalize a zero vector")
+        }
+        Float64[] out = Float64.array(data.length(), true)
+        for (i, x in data.kv()) {
+            out[i] = x.castTo(Float64) / n
+        }
+        Vector[Float64] v = new Vector[Float64](out)
+        v.allowMultithreading(allowMultithreading())
+        v.maxWorkerThreads(maxWorkerThreads())
+        return v
+    }
+
+    // outer product: a matrix with element (i, j) = this[i] * other[j]
+    public function Matrix[T] outer(&Vector[T] other) {
+        Int64 n = data.length()
+        Int64 m = other.data.length()
+        Matrix[T] r = new Matrix[T](n, m)
+        r.copySettings(this)
+        if (n > 0 and m > 0) {
+            Matrix[T] col = new Matrix[T](n, 1, data.clone())
+            Matrix[T] row = new Matrix[T](1, m, other.data.clone())
+            r = col * row
+        }
+        return r
+    }
+
+    // row vector × matrix
+    public function Vector[T] operator*(&Matrix[T] m) {
+        Int64 k = data.length()
+        if (m.rows() != k) {
+            throw IllegalArgumentException(f"vector-matrix product: {shapeString()} * {m.shapeString()}")
+        }
+        Int64 n = m.cols()
+        if (k == 0) {
+            return make(T.array(n, true))
+        }
+        return make(intr.matmul(data, m.data, 1, k, n, workers()))
+    }
+
+    public function Vector[T] operator+(&Vector[T] other) {
+        requireSameLength(other, "+")
+        return make(intr.zip("+", data, other.data, workers()))
+    }
+
+    public function Vector[T] operator-(&Vector[T] other) {
+        requireSameLength(other, "-")
+        return make(intr.zip("-", data, other.data, workers()))
+    }
+
+    public function Vector[T] operator-() {
+        T zero = 0
+        return make(intr.scalar("-", data, zero, true, workers()))
+    }
+
+    public function Vector[T] operator+(T s) {
+        return make(intr.scalar("+", data, s, false, workers()))
+    }
+
+    public function Vector[T] operator-(T s) {
+        return make(intr.scalar("-", data, s, false, workers()))
+    }
+
+    public function Vector[T] operator*(T s) {
+        return make(intr.scalar("*", data, s, false, workers()))
+    }
+
+    public function Vector[T] operator/(T s) {
+        return make(intr.scalar("/", data, s, false, workers()))
+    }
+
+    public function Vector[T] operator%(T s) {
+        return make(intr.scalar("%", data, s, false, workers()))
+    }
+
+    public static function Vector[T] operator*(T s, &Vector[T] v) {
+        return v.make(intr.scalar("*", v.data, s, true, v.workers()))
+    }
+
+    public function Vector[T] hadamard(&Vector[T] other) {
+        requireSameLength(other, "hadamard")
+        return make(intr.zip("*", data, other.data, workers()))
+    }
+
+    // ------------------------------------------------------------------ element-wise, as vectors
+    public function Vector[T] round() {
+        return make(intr.round(data, 0, 0, 0, 0, workers()))
+    }
+
+    public function Vector[T] round(Int64 decimals) {
+        return make(intr.round(data, 0, 1, 0, decimals, workers()))
+    }
+
+    public function Vector[T] round(Int64 whole, Int64 decimals) {
+        return make(intr.round(data, 0, 2, whole, decimals, workers()))
+    }
+
+    public function Vector[T] ceil() {
+        return make(intr.round(data, 1, 0, 0, 0, workers()))
+    }
+
+    public function Vector[T] ceil(Int64 decimals) {
+        return make(intr.round(data, 1, 1, 0, decimals, workers()))
+    }
+
+    public function Vector[T] ceil(Int64 whole, Int64 decimals) {
+        return make(intr.round(data, 1, 2, whole, decimals, workers()))
+    }
+
+    public function Vector[T] floor() {
+        return make(intr.round(data, 2, 0, 0, 0, workers()))
+    }
+
+    public function Vector[T] floor(Int64 decimals) {
+        return make(intr.round(data, 2, 1, 0, decimals, workers()))
+    }
+
+    public function Vector[T] floor(Int64 whole, Int64 decimals) {
+        return make(intr.round(data, 2, 2, whole, decimals, workers()))
+    }
+
+    public function Vector[T] abs() {
+        T[] out = data.clone()
+        for (Int64 i = 0; i < out.length(); i += 1) {
+            out[i] = out[i].abs()
+        }
+        return make(out)
+    }
+
+    public function Vector[T] pow(T exponent) {
+        return make(intr.scalar("**", data, exponent, false, workers()))
+    }
+
+    public function Vector[T] map(Function[(T), T] f) {
+        T[] out = data.clone()
+        for (Int64 i = 0; i < out.length(); i += 1) {
+            out[i] = f(out[i])
+        }
+        return make(out)
+    }
+
+    public function Vector[U] migrate[U extends Numeric]() {
+        return this.migrate[U]("round")
+    }
+
+    public function Vector[U] migrate[U extends Numeric](String method) {
+        Vector[U] v = new Vector[U](intr.migrate[U](data, method, workers()))
+        v.allowMultithreading(allowMultithreading())
+        v.maxWorkerThreads(maxWorkerThreads())
+        return v
+    }
+}

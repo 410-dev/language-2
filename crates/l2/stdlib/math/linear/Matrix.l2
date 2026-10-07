@@ -1,0 +1,455 @@
+@using sdk 1
+
+// math.linear.Matrix: a rank-2 tensor with linear algebra semantics (spec 14.4).
+// `*` between matrices (and with vectors) is the matrix product; use hadamard() for the
+// element-wise product.
+
+using intrinsics as intr
+
+public class Matrix[T extends Numeric = Float64] extends Tensor[T] {
+    // A zero matrix.
+    public Matrix(Int64 rows, Int64 cols) {
+        super([rows, cols])
+    }
+
+    // A matrix holding `values` row by row.
+    public Matrix(Int64 rows, Int64 cols, T[] values) {
+        super([rows, cols], values)
+    }
+
+    // A matrix from its rows: new Matrix([[1, 2], [3, 4]]).
+    public Matrix(T[][] rows) {
+        super(shapeOfRows(&rows), joinRows(&rows))
+    }
+
+    protected static function Int64[] shapeOfRows(&T[][] rows) {
+        Int64 cols = rows.isEmpty() ? 0 : rows[0].length()
+        for (i, r in rows.kv()) {
+            if (r.length() != cols) {
+                throw IllegalArgumentException(f"row {i} has {r.length()} values, expected {cols}")
+            }
+        }
+        return [rows.length(), cols]
+    }
+
+    protected static function T[] joinRows(&T[][] rows) {
+        T[] out = T.array()
+        for (r in rows) {
+            for (x in r) {
+                out.insert(out.length(), x)
+            }
+        }
+        return out
+    }
+
+    // a matrix of the given size and this matrix's settings
+    protected function Matrix[T] make(Int64 rows, Int64 cols, T[] values) {
+        Matrix[T] m = new Matrix[T](rows, cols, values)
+        m.copySettings(this)
+        return m
+    }
+
+    // ------------------------------------------------------------------ factories
+    public static function Matrix[T] identity(Int64 n) {
+        Matrix[T] m = new Matrix[T](n, n)
+        T one = 1
+        for (Int64 i = 0; i < n; i += 1) {
+            m.data[i * n + i] = one
+        }
+        return m
+    }
+
+    public static function Matrix[T] zeros(Int64 rows, Int64 cols) {
+        return new Matrix[T](rows, cols)
+    }
+
+    public static function Matrix[T] ones(Int64 rows, Int64 cols) {
+        Matrix[T] m = new Matrix[T](rows, cols)
+        T one = 1
+        m.data.fill(one)
+        return m
+    }
+
+    // ------------------------------------------------------------------ shape
+    public function Int64 rows() {
+        return dims[0]
+    }
+
+    public function Int64 cols() {
+        return dims[1]
+    }
+
+    public function Boolean isSquare() {
+        return dims[0] == dims[1]
+    }
+
+    public function Vector[T] row(Int64 i) {
+        Int64 r = checkIndex(i, dims[0], "row")
+        Int64 n = dims[1]
+        T[] out = T.array(n, true)
+        for (Int64 j = 0; j < n; j += 1) {
+            out[j] = data[r * n + j]
+        }
+        Vector[T] v = new Vector[T](out)
+        v.copySettings(this)
+        return v
+    }
+
+    public function Vector[T] column(Int64 j) {
+        Int64 c = checkIndex(j, dims[1], "column")
+        Int64 n = dims[0]
+        T[] out = T.array(n, true)
+        for (Int64 i = 0; i < n; i += 1) {
+            out[i] = data[i * dims[1] + c]
+        }
+        Vector[T] v = new Vector[T](out)
+        v.copySettings(this)
+        return v
+    }
+
+    public function void setRow(Int64 i, &Vector[T] values) {
+        Int64 r = checkIndex(i, dims[0], "row")
+        if (values.size() != dims[1]) {
+            throw IllegalArgumentException(f"setRow: expected {dims[1]} values, got {values.size()}")
+        }
+        for (Int64 j = 0; j < dims[1]; j += 1) {
+            data[r * dims[1] + j] = values.data[j]
+        }
+    }
+
+    public function void setColumn(Int64 j, &Vector[T] values) {
+        Int64 c = checkIndex(j, dims[1], "column")
+        if (values.size() != dims[0]) {
+            throw IllegalArgumentException(f"setColumn: expected {dims[0]} values, got {values.size()}")
+        }
+        for (Int64 i = 0; i < dims[0]; i += 1) {
+            data[i * dims[1] + c] = values.data[i]
+        }
+    }
+
+    protected static function Int64 checkIndex(Int64 i, Int64 n, String what) {
+        Int64 k = i < 0 ? i + n : i
+        if (k < 0 or k >= n) {
+            throw IndexOutOfBoundsException(f"{what} {i} is out of bounds for size {n}")
+        }
+        return k
+    }
+
+    // ------------------------------------------------------------------ linear algebra
+    public function Matrix[T] transpose() {
+        return make(dims[1], dims[0], intr.transpose(data, dims[0], dims[1]))
+    }
+
+    // the matrix product
+    public function Matrix[T] matmul(&Matrix[T] other) {
+        Int64 n = dims[0]
+        Int64 k = dims[1]
+        Int64 m = other.dims[1]
+        if (other.dims[0] != k) {
+            throw IllegalArgumentException(f"matrix product: {shapeString()} * {other.shapeString()} (inner dimensions differ)")
+        }
+        if (k == 0) {
+            return make(n, m, T.array(n * m, true))
+        }
+        return make(n, m, intr.matmul(data, other.data, n, k, m, workers()))
+    }
+
+    public function Matrix[T] operator*(&Matrix[T] other) {
+        return matmul(other)
+    }
+
+    // matrix × column vector
+    public function Vector[T] operator*(&Vector[T] v) {
+        Int64 n = dims[0]
+        Int64 k = dims[1]
+        if (v.size() != k) {
+            throw IllegalArgumentException(f"matrix-vector product: {shapeString()} * {v.shapeString()}")
+        }
+        T[] out = k == 0 ? T.array(n, true) : intr.matmul(data, v.data, n, k, 1, workers())
+        Vector[T] r = new Vector[T](out)
+        r.copySettings(this)
+        return r
+    }
+
+    // integer power of a square matrix (repeated squaring); m ** 0 is the identity
+    public function Matrix[T] operator**(Int64 k) {
+        if (not isSquare()) {
+            throw IllegalArgumentException(f"power of a non-square matrix {shapeString()}")
+        }
+        if (k < 0) {
+            throw IllegalArgumentException("negative matrix power; use inverse()")
+        }
+        Matrix[T] result = identity(dims[0])
+        result.copySettings(this)
+        Matrix[T] base = make(dims[0], dims[1], data.clone())
+        Int64 e = k
+        for (; e > 0;) {
+            if (e % 2 == 1) {
+                result = result * base
+            }
+            e = e / 2
+            if (e > 0) {
+                base = base * base
+            }
+        }
+        return result
+    }
+
+    public function Matrix[T] operator+(&Matrix[T] other) {
+        requireSameShape(other, "+")
+        return make(dims[0], dims[1], intr.zip("+", data, other.data, workers()))
+    }
+
+    public function Matrix[T] operator-(&Matrix[T] other) {
+        requireSameShape(other, "-")
+        return make(dims[0], dims[1], intr.zip("-", data, other.data, workers()))
+    }
+
+    public function Matrix[T] operator-() {
+        T zero = 0
+        return make(dims[0], dims[1], intr.scalar("-", data, zero, true, workers()))
+    }
+
+    public function Matrix[T] operator+(T s) {
+        return make(dims[0], dims[1], intr.scalar("+", data, s, false, workers()))
+    }
+
+    public function Matrix[T] operator-(T s) {
+        return make(dims[0], dims[1], intr.scalar("-", data, s, false, workers()))
+    }
+
+    public function Matrix[T] operator*(T s) {
+        return make(dims[0], dims[1], intr.scalar("*", data, s, false, workers()))
+    }
+
+    public function Matrix[T] operator/(T s) {
+        return make(dims[0], dims[1], intr.scalar("/", data, s, false, workers()))
+    }
+
+    public function Matrix[T] operator%(T s) {
+        return make(dims[0], dims[1], intr.scalar("%", data, s, false, workers()))
+    }
+
+    public static function Matrix[T] operator*(T s, &Matrix[T] m) {
+        return m.make(m.dims[0], m.dims[1], intr.scalar("*", m.data, s, true, m.workers()))
+    }
+
+    public function Matrix[T] hadamard(&Matrix[T] other) {
+        requireSameShape(other, "hadamard")
+        return make(dims[0], dims[1], intr.zip("*", data, other.data, workers()))
+    }
+
+    public function T trace() {
+        if (not isSquare()) {
+            throw IllegalArgumentException(f"trace of a non-square matrix {shapeString()}")
+        }
+        T acc = 0
+        for (Int64 i = 0; i < dims[0]; i += 1) {
+            acc += data[i * dims[0] + i]
+        }
+        return acc
+    }
+
+    // the elements as Float64, row-major
+    protected function Float64[] floats() {
+        Float64[] a = Float64.array(data.length(), true)
+        for (i, x in data.kv()) {
+            a[i] = x.castTo(Float64)
+        }
+        return a
+    }
+
+    // determinant by Gaussian elimination with partial pivoting (computed in Float64)
+    public function Float64 determinant() {
+        if (not isSquare()) {
+            throw IllegalArgumentException(f"determinant of a non-square matrix {shapeString()}")
+        }
+        Int64 n = dims[0]
+        Float64[] a = floats()
+        Float64 det = 1.0
+        for (Int64 col = 0; col < n; col += 1) {
+            Int64 pivot = col
+            for (Int64 r = col + 1; r < n; r += 1) {
+                if (a[r * n + col].abs() > a[pivot * n + col].abs()) {
+                    pivot = r
+                }
+            }
+            if (a[pivot * n + col] == 0.0) {
+                return 0.0
+            }
+            if (pivot != col) {
+                for (Int64 c = 0; c < n; c += 1) {
+                    Float64 t = a[col * n + c]
+                    a[col * n + c] = a[pivot * n + c]
+                    a[pivot * n + c] = t
+                }
+                det = -det
+            }
+            det *= a[col * n + col]
+            for (Int64 r = col + 1; r < n; r += 1) {
+                Float64 f = a[r * n + col] / a[col * n + col]
+                for (Int64 c = col; c < n; c += 1) {
+                    a[r * n + c] -= f * a[col * n + c]
+                }
+            }
+        }
+        return det
+    }
+
+    // Gauss-Jordan elimination of [A | B] in place; returns B's columns solved (Float64)
+    protected function Float64[] eliminate(Float64[] b, Int64 bcols) {
+        Int64 n = dims[0]
+        Float64[] a = floats()
+        for (Int64 col = 0; col < n; col += 1) {
+            Int64 pivot = col
+            for (Int64 r = col + 1; r < n; r += 1) {
+                if (a[r * n + col].abs() > a[pivot * n + col].abs()) {
+                    pivot = r
+                }
+            }
+            if (a[pivot * n + col].abs() < 1e-12) {
+                throw ArithmeticException("matrix is singular")
+            }
+            if (pivot != col) {
+                for (Int64 c = 0; c < n; c += 1) {
+                    Float64 t = a[col * n + c]
+                    a[col * n + c] = a[pivot * n + c]
+                    a[pivot * n + c] = t
+                }
+                for (Int64 c = 0; c < bcols; c += 1) {
+                    Float64 t = b[col * bcols + c]
+                    b[col * bcols + c] = b[pivot * bcols + c]
+                    b[pivot * bcols + c] = t
+                }
+            }
+            Float64 p = a[col * n + col]
+            for (Int64 c = 0; c < n; c += 1) {
+                a[col * n + c] /= p
+            }
+            for (Int64 c = 0; c < bcols; c += 1) {
+                b[col * bcols + c] /= p
+            }
+            for (Int64 r = 0; r < n; r += 1) {
+                if (r != col) {
+                    Float64 f = a[r * n + col]
+                    if (f != 0.0) {
+                        for (Int64 c = 0; c < n; c += 1) {
+                            a[r * n + c] -= f * a[col * n + c]
+                        }
+                        for (Int64 c = 0; c < bcols; c += 1) {
+                            b[r * bcols + c] -= f * b[col * bcols + c]
+                        }
+                    }
+                }
+            }
+        }
+        return b
+    }
+
+    // the inverse (in Float64); ArithmeticException if the matrix is singular
+    public function Matrix[Float64] inverse() {
+        if (not isSquare()) {
+            throw IllegalArgumentException(f"inverse of a non-square matrix {shapeString()}")
+        }
+        Int64 n = dims[0]
+        Float64[] id = Float64.array(n * n, true)
+        for (Int64 i = 0; i < n; i += 1) {
+            id[i * n + i] = 1.0
+        }
+        Matrix[Float64] r = new Matrix[Float64](n, n, eliminate(id, n))
+        r.allowMultithreading(allowMultithreading())
+        r.maxWorkerThreads(maxWorkerThreads())
+        return r
+    }
+
+    // solves A x = b (in Float64)
+    public function Vector[Float64] solve(&Vector[T] b) {
+        if (not isSquare()) {
+            throw IllegalArgumentException(f"solve needs a square matrix, got {shapeString()}")
+        }
+        if (b.size() != dims[0]) {
+            throw IllegalArgumentException(f"solve: {shapeString()} with a vector of size {b.size()}")
+        }
+        Float64[] rhs = Float64.array(b.size(), true)
+        for (i, x in b.data.kv()) {
+            rhs[i] = x.castTo(Float64)
+        }
+        return new Vector[Float64](eliminate(rhs, 1))
+    }
+
+    // ------------------------------------------------------------------ element-wise, as matrices
+    public function Matrix[T] round() {
+        return make(dims[0], dims[1], intr.round(data, 0, 0, 0, 0, workers()))
+    }
+
+    public function Matrix[T] round(Int64 decimals) {
+        return make(dims[0], dims[1], intr.round(data, 0, 1, 0, decimals, workers()))
+    }
+
+    public function Matrix[T] round(Int64 whole, Int64 decimals) {
+        return make(dims[0], dims[1], intr.round(data, 0, 2, whole, decimals, workers()))
+    }
+
+    public function Matrix[T] ceil() {
+        return make(dims[0], dims[1], intr.round(data, 1, 0, 0, 0, workers()))
+    }
+
+    public function Matrix[T] ceil(Int64 decimals) {
+        return make(dims[0], dims[1], intr.round(data, 1, 1, 0, decimals, workers()))
+    }
+
+    public function Matrix[T] ceil(Int64 whole, Int64 decimals) {
+        return make(dims[0], dims[1], intr.round(data, 1, 2, whole, decimals, workers()))
+    }
+
+    public function Matrix[T] floor() {
+        return make(dims[0], dims[1], intr.round(data, 2, 0, 0, 0, workers()))
+    }
+
+    public function Matrix[T] floor(Int64 decimals) {
+        return make(dims[0], dims[1], intr.round(data, 2, 1, 0, decimals, workers()))
+    }
+
+    public function Matrix[T] floor(Int64 whole, Int64 decimals) {
+        return make(dims[0], dims[1], intr.round(data, 2, 2, whole, decimals, workers()))
+    }
+
+    public function Matrix[T] abs() {
+        T[] out = data.clone()
+        for (Int64 i = 0; i < out.length(); i += 1) {
+            out[i] = out[i].abs()
+        }
+        return make(dims[0], dims[1], out)
+    }
+
+    public function Matrix[T] pow(T exponent) {
+        return make(dims[0], dims[1], intr.scalar("**", data, exponent, false, workers()))
+    }
+
+    public function Matrix[T] map(Function[(T), T] f) {
+        T[] out = data.clone()
+        for (Int64 i = 0; i < out.length(); i += 1) {
+            out[i] = f(out[i])
+        }
+        return make(dims[0], dims[1], out)
+    }
+
+    public function Matrix[U] migrate[U extends Numeric]() {
+        return this.migrate[U]("round")
+    }
+
+    public function Matrix[U] migrate[U extends Numeric](String method) {
+        Matrix[U] m = new Matrix[U](dims[0], dims[1], intr.migrate[U](data, method, workers()))
+        m.allowMultithreading(allowMultithreading())
+        m.maxWorkerThreads(maxWorkerThreads())
+        return m
+    }
+
+    // replaces every element by f(row, column, element)
+    public function void forEachElement(Function[(Int64, Int64, T), T] f) {
+        Int64 cols = dims[1]
+        for (Int64 i = 0; i < data.length(); i += 1) {
+            data[i] = f(i / cols, i % cols, data[i])
+        }
+    }
+}

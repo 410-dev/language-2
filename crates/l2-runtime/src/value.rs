@@ -608,6 +608,8 @@ pub trait Host {
     type Err;
     fn throw(&mut self, kind: ExcKind, msg: String) -> Self::Err;
     fn obj_to_string(&mut self, o: &Rc<Object>) -> Result<String, Self::Err>;
+    /// The default `Name(field=value, ...)` form, ignoring any `toString` override.
+    fn obj_default_string(&mut self, o: &Rc<Object>) -> Result<String, Self::Err>;
     fn obj_equals(&mut self, a: &Rc<Object>, b: &Rc<Object>) -> Result<bool, Self::Err>;
     fn obj_compare(&mut self, a: &Rc<Object>, b: &Rc<Object>) -> Result<i32, Self::Err>;
     fn is_subclass(&self, cls: u32, of: u32) -> bool;

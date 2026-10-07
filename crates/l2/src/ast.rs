@@ -85,6 +85,8 @@ impl BinOp {
 pub enum FStrPart {
     Lit(String),
     Expr(Expr),
+    /// `{expr!conv:spec}` / `{expr=}` (spec 11.1): the specifier may contain nested fields.
+    Fmt { expr: Expr, conv: Option<char>, debug: Option<String>, spec: Vec<FStrPart> },
 }
 
 #[derive(Clone, Debug)]
@@ -128,6 +130,9 @@ pub enum ExprKind {
     /// A type used in expression position, e.g. the argument of `castTo(Int8)` when it is not a
     /// plain identifier (`castTo(Int64[])`, `castTo(String?)`).
     TypeLit(TypeExpr),
+    /// `new T(args)` — `T` is a class name, possibly qualified (`linear.Matrix`) or with type
+    /// arguments (`Box[Int64]`).
+    New(Box<Expr>, Vec<Arg>),
 }
 
 #[derive(Clone, Debug)]
@@ -197,7 +202,18 @@ pub enum StmtKind {
     Throw(Expr),
     Try { body: Block, catches: Vec<CatchClause>, finally: Option<Block> },
     Block(Block),
-    Using { module: String, alias: String },
+    Using(UsingDecl),
+}
+
+/// `using a.b.c [as x]` / `using a.b.* [as x]` (spec 14.1).
+#[derive(Clone, Debug)]
+pub struct UsingDecl {
+    pub path: String,
+    /// `None` when no `as` clause was written.
+    pub alias: Option<String>,
+    /// `.*` was written: import a whole package.
+    pub wildcard: bool,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug)]
@@ -232,6 +248,8 @@ pub struct Mods {
 pub struct TypeParam {
     pub name: String,
     pub bound: Option<TypeExpr>,
+    /// `T extends Numeric = Float64`: used when the type argument is omitted.
+    pub default: Option<TypeExpr>,
 }
 
 #[derive(Clone, Debug)]
@@ -310,7 +328,7 @@ pub enum Item {
     Function(FuncDecl),
     Class(ClassDecl),
     Interface(InterfaceDecl),
-    Using { module: String, alias: String, span: Span },
+    Using(UsingDecl),
 }
 
 #[derive(Clone, Debug)]

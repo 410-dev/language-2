@@ -1,0 +1,7 @@
+// error: type Point does not support indexing (it has no 'operator[]' method)
+public class Point {
+}
+function void main() {
+    Point p = Point()
+    Int64 x = p[0]
+}

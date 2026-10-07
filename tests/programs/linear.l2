@@ -1,0 +1,98 @@
+@using sdk 1
+@runtime compiler interpreter bytecode
+@compiler(EnableSoftwareEmulation=true)
+using stdio as stdio
+using math.linear.Matrix as Matrix
+using math.linear.Vector as Vector
+using math.linear.Tensor as Tensor
+
+// spec 14.4 math.linear: Tensor / Matrix / Vector
+
+function void main() {
+    Matrix a = new Matrix([[1, 2], [3, 4]])
+    Matrix id = Matrix.identity(2)
+    stdio.println(a)
+    stdio.println(f"{a * id == a} {a.rows()}x{a.cols()} {a.shapeString()} rank={a.rank()} size={a.size()}")
+    stdio.println(a.transpose())
+    stdio.println(a * a)
+    stdio.println(2.0 * a + a - id)
+    stdio.println(-a / 2.0)
+    stdio.println(a ** 3)
+    stdio.println(f"det={a.determinant()} trace={a.trace()}")
+    stdio.println(a.inverse().round(10))
+    stdio.println((a * a.inverse()).round(10) == id)
+    Vector v = new Vector([1.0, 1.0])
+    stdio.println(f"{a * v} {v * a} {a.row(1)} {a.column(0)}")
+    stdio.println(a.solve(&new Vector([5.0, 11.0])).round(9))
+    a[0, 1] = 9.5
+    a[1, 0] += 0.25
+    stdio.println(f"{a[0, 1]} {a[1, 0]} {a.get([1, 1])}")
+
+    Matrix[Int32] m = new Matrix[Int32]([[1, 2], [3, 4]])
+    stdio.println(m * m)
+    stdio.println(Matrix[Int64].identity(3) * 5)
+    Matrix[Int8] i8 = new Matrix[Int8]([[100, 100], [1, 1]])
+    try {
+        stdio.println(i8 * i8)
+    } catch (ArithmeticException e) {
+        stdio.println("overflow: " + e.getMessage())
+    }
+    try {
+        stdio.println(a * new Matrix(3, 3))
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+    try {
+        stdio.println(new Matrix([[1.0, 2.0], [2.0, 4.0]]).inverse())
+    } catch (ArithmeticException e) {
+        stdio.println(e.getMessage())
+    }
+
+    // rounding (element-wise) and lambdas
+    Matrix t = new Matrix(2, 3)
+    t.forEachElement((Int64 i, Int64 j, Float64 x) -> (i * 10 + j).castTo(Float64))
+    t.forEachRow((Vector row) -> row * 2.0)
+    t.forEachColumn((Int64 c, Vector col) -> col + c.castTo(Float64))
+    t.forEachElement((x) -> x / 3.0)
+    stdio.println(t)
+    stdio.println(f"{t.round(2)}\n{t.ceil(1)}\n{t.floor()}\n{t.round(1, 0)}")
+    stdio.println(t.map((x) -> x * x).round(1))
+
+    Tensor cube = Tensor.zeros([2, 2, 2])
+    cube.forEachElement((Int64[] idx, Float64 x) -> (idx[0] * 4 + idx[1] * 2 + idx[2]).castTo(Float64) + 0.25)
+    stdio.println(cube)
+    stdio.println(f"{cube[1, 0, 1]} {cube.shapeString()} sum={cube.sum()} mean={cube.mean()} min={cube.min()} max={cube.max()}")
+    stdio.println(cube.reshape([4, 2]).flatten())
+
+    // element type migration
+    Matrix[Float32] f32 = new Matrix[Float32]([[1.1, 2.5], [-3.5, 4.4]])
+    Matrix[Float64] up = f32.migrate[Float64]()
+    stdio.println(up)
+    stdio.println(f"{up.migrate[Int32]()}\n{up.migrate[Int32]("ceil")}\n{up.migrate[Int32]("Floor")}")
+    Vector src = new Vector([0.1, 0.2, 1000.7])
+    stdio.println(f"{src.migrate[Float16]()} {src.migrate[Float16]("ceil")} {src.migrate[Float16]("floor")}")
+    try {
+        stdio.println(new Vector([300.0]).migrate[UInt8]())
+    } catch (ArithmeticException e) {
+        stdio.println(e.getMessage())
+    }
+    try {
+        stdio.println(src.migrate[Float32]("up"))
+    } catch (IllegalArgumentException e) {
+        stdio.println(e.getMessage())
+    }
+
+    // vectors
+    Vector p = new Vector([1.0, 2.0, 3.0])
+    Vector q = new Vector([4.0, 5.0, 6.0])
+    stdio.println(f"dot={p.dot(&q)} cross={p.cross(&q)} norm={p.norm():.4f} unit={p.normalized().round(3)}")
+    stdio.println(p.outer(&q))
+    stdio.println(f"{p + q} {q - p} {3.0 * p} {p.hadamard(&q)} {p.pow(2.0)}")
+
+    // worker threads: same results
+    Matrix big = Matrix.ones(200, 200) * 0.5
+    Matrix seq = big * big
+    big.allowMultithreading(true).maxWorkerThreads(4)
+    Matrix par = big * big
+    stdio.println(f"{seq == par} {par[199, 0]} threads={big.allowMultithreading()} max={big.maxWorkerThreads()}")
+}

@@ -8,6 +8,9 @@ use crate::diag::{Diag, Span};
 pub enum FPart {
     Lit(String),
     Expr(String, Span),
+    /// `{expr!conv:spec}` / `{expr=}`: expression source, conversion (`r`/`s`), the debug
+    /// prefix of `{expr=}`, and the format specifier (literal text and nested `{fields}`).
+    Field { src: String, span: Span, conv: Option<char>, debug: Option<String>, spec: Vec<FPart> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +60,7 @@ pub enum Tok {
     Using,
     As,
     Void,
+    New,
     // punctuation
     LParen,
     RParen,
@@ -203,6 +207,7 @@ pub fn tok_text(t: &Tok) -> &'static str {
         Using => "using",
         As => "as",
         Void => "void",
+        New => "new",
         LParen => "(",
         RParen => ")",
         LBracket => "[",
@@ -289,6 +294,7 @@ fn keyword(s: &str) -> Option<Tok> {
         "using" => Using,
         "as" => As,
         "void" => Void,
+        "new" => New,
         _ => return None,
     })
 }
@@ -363,9 +369,12 @@ impl<'a> Lexer<'a> {
         if matches!(self.depth.last(), Some('(') | Some('[')) {
             return;
         }
+        // `using pkg.*` ends its line although `*` is otherwise a binary operator
+        let n = self.out.len();
+        let wildcard = n >= 2 && self.out[n - 1].tok == Tok::Star && self.out[n - 2].tok == Tok::Dot;
         match self.out.last() {
             None => {}
-            Some(t) if t.tok.continues_line() => {}
+            Some(t) if t.tok.continues_line() && !wildcard => {}
             _ => self.out.push(Token { tok: Tok::Newline, span }),
         }
     }
@@ -543,45 +552,7 @@ impl<'a> Lexer<'a> {
                     if !lit.is_empty() {
                         parts.push(FPart::Lit(std::mem::take(&mut lit)));
                     }
-                    let espan = self.span();
-                    let mut depth = 0;
-                    let mut e = String::new();
-                    loop {
-                        let c = self.peek();
-                        if self.pos >= self.chars.len() || c == '\n' {
-                            return Err(Diag::error(start, "unterminated f-string expression"));
-                        }
-                        if c == '}' && depth == 0 {
-                            self.bump();
-                            break;
-                        }
-                        if c == '{' {
-                            depth += 1;
-                        }
-                        if c == '}' {
-                            depth -= 1;
-                        }
-                        if c == '"' {
-                            // nested string literal inside the expression
-                            e.push(self.bump());
-                            while self.peek() != '"' {
-                                if self.pos >= self.chars.len() {
-                                    return Err(Diag::error(start, "unterminated string in f-string"));
-                                }
-                                if self.peek() == '\\' {
-                                    e.push(self.bump());
-                                }
-                                e.push(self.bump());
-                            }
-                            e.push(self.bump());
-                            continue;
-                        }
-                        e.push(self.bump());
-                    }
-                    if e.trim().is_empty() {
-                        return Err(Diag::error(espan, "empty expression in f-string"));
-                    }
-                    parts.push(FPart::Expr(e, espan));
+                    parts.push(self.fstring_field(start)?);
                 }
                 _ if self.pos >= self.chars.len() || self.peek() == '\n' => {
                     return Err(Diag::error(start, "unterminated f-string"));
@@ -589,6 +560,156 @@ impl<'a> Lexer<'a> {
                 _ => lit.push(self.bump()),
             }
         }
+    }
+
+    /// Copies a string literal inside an f-string field verbatim.
+    fn fstring_nested_str(&mut self, out: &mut String, start: Span) -> Result<(), Diag> {
+        out.push(self.bump());
+        while self.peek() != '"' {
+            if self.pos >= self.chars.len() || self.peek() == '\n' {
+                return Err(Diag::error(start, "unterminated string in f-string"));
+            }
+            if self.peek() == '\\' {
+                out.push(self.bump());
+            }
+            out.push(self.bump());
+        }
+        out.push(self.bump());
+        Ok(())
+    }
+
+    /// Scans a replacement field after its `{`: `expr`, then optionally `=`, `!r`/`!s` and
+    /// `:spec` (spec 11.1, Python's format specification mini-language).
+    fn fstring_field(&mut self, start: Span) -> Result<FPart, Diag> {
+        let espan = self.span();
+        let mut depth = 0i32;
+        let mut ternary = 0i32;
+        let mut e = String::new();
+        let mut conv = None;
+        let mut debug: Option<String> = None;
+        let mut has_spec = false;
+        loop {
+            let c = self.peek();
+            if self.pos >= self.chars.len() || c == '\n' {
+                return Err(Diag::error(start, "unterminated f-string expression"));
+            }
+            if depth == 0 {
+                match c {
+                    '}' => {
+                        self.bump();
+                        break;
+                    }
+                    ':' if ternary == 0 => {
+                        self.bump();
+                        has_spec = true;
+                        break;
+                    }
+                    ':' => ternary -= 1,
+                    '?' if self.peek_at(1) == '?' => {
+                        e.push(self.bump());
+                        e.push(self.bump());
+                        continue;
+                    }
+                    '?' => ternary += 1,
+                    '!' if matches!(self.peek_at(1), 'r' | 's') && matches!(self.peek_at(2), ':' | '}') => {
+                        self.bump();
+                        conv = Some(self.bump());
+                        has_spec = self.bump() == ':';
+                        break;
+                    }
+                    '=' if debug.is_none() => {
+                        let prev = e.trim_end().chars().last().unwrap_or(' ');
+                        let mut k = 1;
+                        while self.peek_at(k) == ' ' {
+                            k += 1;
+                        }
+                        let after = self.peek_at(k);
+                        if !matches!(prev, '=' | '!' | '<' | '>') && self.peek_at(1) != '=' && matches!(after, '}' | ':' | '!') {
+                            let mut text = e.clone();
+                            for _ in 0..k {
+                                text.push(self.bump());
+                            }
+                            debug = Some(text);
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if debug.is_some() {
+                return Err(Diag::error(espan, "expected '}', '!' or ':' after '=' in an f-string field"));
+            }
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                '"' => {
+                    self.fstring_nested_str(&mut e, start)?;
+                    continue;
+                }
+                _ => {}
+            }
+            e.push(self.bump());
+        }
+        if e.trim().is_empty() {
+            return Err(Diag::error(espan, "empty expression in f-string"));
+        }
+        let mut spec = Vec::new();
+        if has_spec {
+            let mut text = String::new();
+            loop {
+                let c = self.peek();
+                if self.pos >= self.chars.len() || c == '\n' {
+                    return Err(Diag::error(start, "unterminated format specifier in f-string"));
+                }
+                match c {
+                    '}' => {
+                        self.bump();
+                        break;
+                    }
+                    '{' => {
+                        self.bump();
+                        if !text.is_empty() {
+                            spec.push(FPart::Lit(std::mem::take(&mut text)));
+                        }
+                        let nspan = self.span();
+                        let mut inner = String::new();
+                        let mut d = 0;
+                        loop {
+                            let c = self.peek();
+                            if self.pos >= self.chars.len() || c == '\n' {
+                                return Err(Diag::error(start, "unterminated field in a format specifier"));
+                            }
+                            if c == '}' && d == 0 {
+                                self.bump();
+                                break;
+                            }
+                            match c {
+                                '(' | '[' | '{' => d += 1,
+                                ')' | ']' | '}' => d -= 1,
+                                '"' => {
+                                    self.fstring_nested_str(&mut inner, start)?;
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                            inner.push(self.bump());
+                        }
+                        if inner.trim().is_empty() {
+                            return Err(Diag::error(nspan, "empty expression in a format specifier"));
+                        }
+                        spec.push(FPart::Expr(inner, nspan));
+                    }
+                    _ => text.push(self.bump()),
+                }
+            }
+            if !text.is_empty() {
+                spec.push(FPart::Lit(text));
+            }
+        }
+        if conv.is_none() && debug.is_none() && !has_spec {
+            return Ok(FPart::Expr(e, espan));
+        }
+        Ok(FPart::Field { src: e, span: espan, conv, debug, spec })
     }
 
     fn number(&mut self) -> Result<Tok, Diag> {

@@ -112,9 +112,7 @@ impl Parser {
                 }
             }
             if self.at(&Tok::Using) {
-                let span = self.span();
-                let (module, alias) = self.using()?;
-                items.push(Item::Using { module, alias, span });
+                items.push(Item::Using(self.using()?));
                 continue;
             }
             items.push(self.item()?);
@@ -122,16 +120,22 @@ impl Parser {
         Ok(FileAst { file: self.file, directives, items })
     }
 
-    fn using(&mut self) -> PResult<(String, String)> {
+    fn using(&mut self) -> PResult<UsingDecl> {
+        let span = self.span();
         self.expect(&Tok::Using)?;
-        let mut module = self.ident()?;
+        let mut path = self.ident()?;
+        let mut wildcard = false;
         while self.eat(&Tok::Dot) {
-            module.push('.');
-            module.push_str(&self.ident()?);
+            if self.eat(&Tok::Star) {
+                wildcard = true;
+                break;
+            }
+            path.push('.');
+            path.push_str(&self.ident()?);
         }
-        let alias = if self.eat(&Tok::As) { self.ident()? } else { module.rsplit('.').next().unwrap().to_string() };
+        let alias = if self.eat(&Tok::As) { Some(self.ident()?) } else { None };
         self.end_stmt()?;
-        Ok((module, alias))
+        Ok(UsingDecl { path, alias, wildcard, span })
     }
 
     fn directive(&mut self) -> PResult<Directive> {
@@ -265,7 +269,8 @@ impl Parser {
             while !self.at(&Tok::RBracket) {
                 let name = self.ident()?;
                 let bound = if self.eat(&Tok::Extends) { Some(self.parse_type()?) } else { None };
-                tps.push(TypeParam { name, bound });
+                let default = if self.eat(&Tok::Assign) { Some(self.parse_type()?) } else { None };
+                tps.push(TypeParam { name, bound, default });
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
@@ -318,7 +323,7 @@ impl Parser {
         let span = self.span();
         self.expect(&Tok::Function)?;
         let ret = self.parse_type()?;
-        let name = self.ident()?;
+        let name = self.function_name()?;
         let type_params = self.type_params()?;
         let params = self.params()?;
         let throws = self.throws()?;
@@ -334,6 +339,27 @@ impl Parser {
         }
         self.end_stmt()?;
         Ok(FuncDecl { mods, ret, name, type_params, params, throws, body, delegate, span })
+    }
+
+    /// A function name, or `operator<op>` for operator overloading (spec 6.9).
+    fn function_name(&mut self) -> PResult<String> {
+        let name = self.ident()?;
+        if name != "operator" || matches!(self.peek(), Tok::LParen | Tok::LBracket if self.peek_at(1) != &Tok::RBracket) {
+            return Ok(name);
+        }
+        let op = match self.bump() {
+            Tok::LBracket => {
+                self.expect(&Tok::RBracket)?;
+                if self.eat(&Tok::Assign) {
+                    "[]="
+                } else {
+                    "[]"
+                }
+            }
+            t @ (Tok::Plus | Tok::Minus | Tok::Star | Tok::Slash | Tok::Percent | Tok::StarStar | Tok::AmpAmp | Tok::PipePipe | Tok::Caret | Tok::Shl | Tok::Shr | Tok::Tilde) => crate::lexer::tok_text(&t),
+            other => return Err(Diag::error(self.span(), format!("'{}' cannot be overloaded", crate::lexer::tok_text(&other)))),
+        };
+        Ok(format!("operator{}", op))
     }
 
     fn class(&mut self, mods: Mods) -> PResult<ClassDecl> {
@@ -476,6 +502,13 @@ impl Parser {
             }
             Tok::Ident(name) => {
                 self.bump();
+                let mut name = name;
+                // qualified names: `linear.Matrix`, `math.linear.Matrix`
+                while self.at(&Tok::Dot) && matches!(self.peek_at(1), Tok::Ident(_)) {
+                    self.bump();
+                    name.push('.');
+                    name.push_str(&self.ident()?);
+                }
                 let mut args = Vec::new();
                 if self.at(&Tok::LBracket) && self.peek_at(1) != &Tok::RBracket {
                     self.bump();
@@ -574,10 +607,7 @@ impl Parser {
                 self.end_stmt()?;
                 StmtKind::Fallthrough
             }
-            Tok::Using => {
-                let (module, alias) = self.using()?;
-                StmtKind::Using { module, alias }
-            }
+            Tok::Using => StmtKind::Using(self.using()?),
             _ => {
                 let k = self.simple_stmt()?;
                 self.end_stmt()?;
@@ -1105,9 +1135,53 @@ impl Parser {
         Ok(Expr::new(ExprKind::Lambda { params, ret: None, body, is_move }, span))
     }
 
+    /// Parses an expression embedded in an f-string.
+    fn sub_expr(&self, src: &str, at: Span) -> PResult<Expr> {
+        let toks = lex_at(src, self.file, at.line, at.col)?;
+        let mut sub = Parser { toks, pos: 0, file: self.file };
+        let e = sub.expr()?;
+        sub.skip_newlines();
+        if !sub.at(&Tok::Eof) {
+            return Err(sub.unexpected("end of f-string expression"));
+        }
+        Ok(e)
+    }
+
+    /// `new T(args)`: `T` is a (qualified) class name with optional type arguments.
+    fn new_expr(&mut self) -> PResult<Expr> {
+        let span = self.span();
+        self.expect(&Tok::New)?;
+        let tspan = self.span();
+        let mut callee = Expr::new(ExprKind::Ident(self.ident()?), tspan);
+        while self.at(&Tok::Dot) {
+            let s = self.span();
+            self.bump();
+            callee = Expr::new(ExprKind::Member(Box::new(callee), self.ident()?), s);
+        }
+        if self.at(&Tok::LBracket) {
+            let s = self.span();
+            self.bump();
+            let mut targs = Vec::new();
+            while !self.at(&Tok::RBracket) {
+                targs.push(self.index_arg()?);
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RBracket)?;
+            callee = Expr::new(ExprKind::Index(Box::new(callee), targs), s);
+        }
+        if !self.at(&Tok::LParen) {
+            return Err(self.unexpected("'(' after the class name in 'new'"));
+        }
+        let args = self.call_args()?;
+        Ok(Expr::new(ExprKind::New(Box::new(callee), args), span))
+    }
+
     fn primary(&mut self) -> PResult<Expr> {
         let span = self.span();
         let k = match self.peek().clone() {
+            Tok::New => return self.new_expr(),
             Tok::Int(v) => {
                 self.bump();
                 ExprKind::Int(v)
@@ -1126,15 +1200,18 @@ impl Parser {
                 for p in parts {
                     match p {
                         FPart::Lit(s) => out.push(FStrPart::Lit(s)),
-                        FPart::Expr(src, espan) => {
-                            let toks = lex_at(&src, self.file, espan.line, espan.col)?;
-                            let mut sub = Parser { toks, pos: 0, file: self.file };
-                            let e = sub.expr()?;
-                            sub.skip_newlines();
-                            if !sub.at(&Tok::Eof) {
-                                return Err(sub.unexpected("end of f-string expression"));
+                        FPart::Expr(src, espan) => out.push(FStrPart::Expr(self.sub_expr(&src, espan)?)),
+                        FPart::Field { src, span: espan, conv, debug, spec } => {
+                            let expr = self.sub_expr(&src, espan)?;
+                            let mut sp = Vec::new();
+                            for p in spec {
+                                match p {
+                                    FPart::Lit(s) => sp.push(FStrPart::Lit(s)),
+                                    FPart::Expr(src, nspan) => sp.push(FStrPart::Expr(self.sub_expr(&src, nspan)?)),
+                                    FPart::Field { span, .. } => return Err(Diag::error(span, "format specifiers cannot nest formatted fields")),
+                                }
                             }
-                            out.push(FStrPart::Expr(e));
+                            out.push(FStrPart::Fmt { expr, conv, debug, spec: sp });
                         }
                     }
                 }
@@ -1252,6 +1329,15 @@ impl Parser {
     }
 }
 
+/// `a.b.c` written as identifiers and member accesses.
+pub fn dotted_name(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Ident(n) => Some(n.clone()),
+        ExprKind::Member(o, n) => Some(format!("{}.{}", dotted_name(o)?, n)),
+        _ => None,
+    }
+}
+
 /// Reinterprets an expression as a type (for type arguments written in expression position).
 pub fn expr_to_type(e: &Expr) -> Option<TypeExpr> {
     match &e.kind {
@@ -1262,8 +1348,9 @@ pub fn expr_to_type(e: &Expr) -> Option<TypeExpr> {
             Some(TypeExpr::Named { name: n.clone(), args: Vec::new(), span: e.span })
         }
         ExprKind::TypeLit(t) => Some(t.clone()),
+        ExprKind::Member(..) => Some(TypeExpr::Named { name: dotted_name(e)?, args: Vec::new(), span: e.span }),
         ExprKind::Index(base, args) => {
-            let ExprKind::Ident(n) = &base.kind else { return None };
+            let n = &dotted_name(base)?;
             let mut targs = Vec::new();
             for a in args {
                 targs.push(expr_to_type(a)?);

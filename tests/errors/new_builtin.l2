@@ -1,0 +1,4 @@
+// error: 'new' creates class instances; 'String' is a built-in type
+function void main() {
+    String s = new String()
+}

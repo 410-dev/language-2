@@ -1,0 +1,4 @@
+// error: unknown package 'no.such'
+using no.such.*
+function void main() {
+}

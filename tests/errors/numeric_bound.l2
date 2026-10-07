@@ -1,0 +1,5 @@
+// error: type argument String of 'Matrix' does not satisfy the bound 'T extends Numeric'
+using math.linear.Matrix as Matrix
+function void main() {
+    Matrix[String] m = new Matrix[String](1, 1)
+}
