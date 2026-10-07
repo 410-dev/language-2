@@ -261,6 +261,193 @@ pub fn definition(a: &Analysis, line: u32, col: u32) -> Option<Location> {
     Some((path, l, c, def.1.chars().count() as u32))
 }
 
+// ---------------------------------------------------------------------- references and rename
+/// A path for comparisons: case-insensitive with `/` separators on Windows.
+fn path_key(p: &Path) -> String {
+    let s = p.display().to_string();
+    if cfg!(windows) {
+        s.replace('\\', "/").to_lowercase()
+    } else {
+        s
+    }
+}
+
+/// What a reference refers to, comparable across analyses of different files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Target {
+    /// A declaration: (path, line, column).
+    Decl(String, u32, u32),
+    /// A class and its constructors: (path of the declaring file, class name).
+    Class(String, String),
+}
+
+fn target_of(a: &Analysis, r: &IdeRef) -> Option<Target> {
+    let def = r.def.as_ref()?;
+    let (file, l, c) = def_position(&a.sources, def);
+    let label = &a.sources.files.get(file as usize)?.0;
+    let path = if label.starts_with('<') { label.clone() } else { path_key(Path::new(label)) };
+    Some(match r.kind {
+        SymKind::Class | SymKind::Interface | SymKind::Constructor => Target::Class(path, def.1.clone()),
+        _ => Target::Decl(path, l, c),
+    })
+}
+
+/// The `.l2` files of the workspace (or of the file's directory without a workspace).
+fn workspace_files(path: &Path, ws: &Workspace) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+        if depth > 12 || out.len() > 5000 {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        entries.sort();
+        for p in entries {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            if p.is_dir() {
+                if !name.starts_with('.') && name != "target" && name != "node_modules" {
+                    walk(&p, out, depth + 1);
+                }
+            } else if p.extension().map(|e| e == SOURCE_EXT).unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+    let mut roots: Vec<PathBuf> = ws.roots.iter().filter(|r| path.starts_with(r)).cloned().collect();
+    if roots.is_empty() {
+        roots = ws.roots.clone();
+    }
+    if roots.is_empty() {
+        roots.extend(path.parent().map(|p| p.to_path_buf()));
+    }
+    let mut out = Vec::new();
+    for r in roots {
+        walk(&r, &mut out, 0);
+    }
+    for p in ws.overlays.keys() {
+        if p.extension().map(|e| e == SOURCE_EXT).unwrap_or(false) && !out.iter().any(|q| path_key(q) == path_key(p)) {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
+/// A place in a file: (path, line, column, length).
+pub type Occurrence = (PathBuf, u32, u32, u32);
+
+/// The symbol at (line, col) and every place that refers to it. Local variables are searched in
+/// the file only; other symbols in all `.l2` files of the workspace. The first element is the
+/// symbol's reference at the position.
+fn occurrences(path: &Path, src: &str, ws: &Workspace, line: u32, col: u32, workspace: bool) -> Option<(IdeRef, Vec<(Occurrence, bool)>)> {
+    let a = analyze(path, src, ws, Want::Refs, None);
+    let r = ref_at(&a, line, col)?.clone();
+    let target = target_of(&a, &r)?;
+    let local = matches!(r.kind, SymKind::Variable | SymKind::Parameter | SymKind::TypeParam);
+    let mut out: Vec<(Occurrence, bool)> = Vec::new();
+    let mut collect = |a: &Analysis, p: &Path| {
+        for x in &a.refs {
+            if target_of(a, x).as_ref() == Some(&target) {
+                let is_decl = x.def.as_ref().map(|d| def_position(&a.sources, d) == (a.file, x.line, x.col)).unwrap_or(false);
+                out.push(((p.to_path_buf(), x.line, x.col, x.len), is_decl));
+            }
+        }
+    };
+    collect(&a, path);
+    if workspace && !local {
+        let me = path_key(path);
+        for f in workspace_files(path, ws) {
+            if path_key(&f) == me {
+                continue;
+            }
+            let Some(text) = ws.overlays.get(&f).cloned().or_else(|| std::fs::read_to_string(&f).ok()) else { continue };
+            // only files that mention the name can refer to it
+            if !text.contains(r.def.as_ref().map(|d| d.1.as_str()).unwrap_or("")) {
+                continue;
+            }
+            let b = analyze(&f, &text, ws, Want::Refs, None);
+            collect(&b, &f);
+        }
+    }
+    out.sort_by_key(|x| (path_key(&x.0 .0), x.0 .1, x.0 .2));
+    out.dedup_by(|x, y| path_key(&x.0 .0) == path_key(&y.0 .0) && x.0 .1 == y.0 .1 && x.0 .2 == y.0 .2);
+    Some((r, out))
+}
+
+/// All references to the symbol at (line, col), declarations included or not.
+pub fn references(path: &Path, src: &str, ws: &Workspace, line: u32, col: u32, include_decl: bool) -> Vec<Occurrence> {
+    match occurrences(path, src, ws, line, col, true) {
+        Some((_, occ)) => occ.into_iter().filter(|(_, d)| include_decl || !d).map(|(o, _)| o).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Occurrences of the symbol at (line, col) in this file only (highlighting): (line, col, len,
+/// is the declaration).
+pub fn highlights(path: &Path, src: &str, ws: &Workspace, line: u32, col: u32) -> Vec<(u32, u32, u32, bool)> {
+    match occurrences(path, src, ws, line, col, false) {
+        Some((_, occ)) => occ.into_iter().filter(|(o, _)| path_key(&o.0) == path_key(path)).map(|((_, l, c, n), d)| (l, c, n, d)).collect(),
+        None => Vec::new(),
+    }
+}
+
+fn valid_name(n: &str) -> bool {
+    let mut cs = n.chars();
+    matches!(cs.next(), Some(c) if c.is_alphabetic() || c == '_') && cs.all(|c| c.is_alphanumeric() || c == '_') && !super::builtins::KEYWORDS.contains(&n) && !n.starts_with("__")
+}
+
+/// Whether the symbol at (line, col) can be renamed: its name and range, or why not.
+pub fn prepare_rename(path: &Path, src: &str, ws: &Workspace, line: u32, col: u32) -> Result<(String, u32, u32, u32), String> {
+    let a = analyze(path, src, ws, Want::Refs, None);
+    let Some(r) = ref_at(&a, line, col) else { return Err("이름을 바꿀 수 있는 기호가 아닙니다".into()) };
+    let Some(def) = &r.def else { return Err("내장 멤버와 타입은 이름을 바꿀 수 없습니다".into()) };
+    if matches!(r.kind, SymKind::Module) {
+        return Err("모듈 이름은 파일 이름이므로 여기서 바꿀 수 없습니다".into());
+    }
+    let (file, _, _) = def_position(&a.sources, def);
+    let label = a.sources.files.get(file as usize).map(|f| f.0.clone()).unwrap_or_default();
+    let decl_path = PathBuf::from(&label);
+    if label.starts_with('<') || module_context(&decl_path, "", ws).stdlib || decl_path.starts_with(stdlib_dir()) {
+        return Err("표준 라이브러리의 선언은 이름을 바꿀 수 없습니다".into());
+    }
+    if matches!(r.kind, SymKind::Class | SymKind::Interface | SymKind::Constructor) && decl_path.file_stem().map(|s| s.to_string_lossy() == def.1).unwrap_or(false) {
+        return Err(format!("'{}'은(는) 모듈 파일 이름과 같은 타입이라 이름을 바꾸면 using 경로가 깨집니다. 파일 이름과 함께 바꿔 주세요", def.1));
+    }
+    let name: String = text::line_of(src, line as usize - 1).chars().skip(r.col as usize - 1).take(r.len as usize).collect();
+    if name != def.1 {
+        return Err(format!("'{}'은(는) 별칭이라 여기서 이름을 바꿀 수 없습니다", name));
+    }
+    Ok((name, r.line, r.col, r.len))
+}
+
+/// The places to replace in each file: (line, col, length).
+pub type FileEdits = Vec<(PathBuf, Vec<(u32, u32, u32)>)>;
+
+/// The edits renaming the symbol at (line, col) to `new_name`, by file.
+pub fn rename(path: &Path, src: &str, ws: &Workspace, line: u32, col: u32, new_name: &str) -> Result<FileEdits, String> {
+    let (old, _, _, _) = prepare_rename(path, src, ws, line, col)?;
+    if !valid_name(new_name) {
+        return Err(format!("'{}'은(는) 이름으로 쓸 수 없습니다", new_name));
+    }
+    let Some((r, occ)) = occurrences(path, src, ws, line, col, true) else { return Err("기호를 찾지 못했습니다".into()) };
+    if matches!(r.kind, SymKind::Class | SymKind::Interface | SymKind::Constructor) && super::builtins::TYPES.iter().any(|(n, _)| *n == new_name) {
+        return Err(format!("'{}'은(는) 내장 타입 이름입니다", new_name));
+    }
+    let mut out: FileEdits = Vec::new();
+    for ((p, l, c, n), _) in occ {
+        // only places that spell the old name (not an alias of it)
+        let text = if path_key(&p) == path_key(path) { Some(src.to_string()) } else { ws.overlays.get(&p).cloned().or_else(|| std::fs::read_to_string(&p).ok()) };
+        let Some(text) = text else { continue };
+        let at: String = text::line_of(&text, l as usize - 1).chars().skip(c as usize - 1).take(n as usize).collect();
+        if at != old {
+            continue;
+        }
+        match out.iter_mut().find(|(q, _)| path_key(q) == path_key(&p)) {
+            Some((_, v)) => v.push((l, c, n)),
+            None => out.push((p, vec![(l, c, n)])),
+        }
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------- completion
 pub struct Completion {
     pub items: Vec<CompItem>,

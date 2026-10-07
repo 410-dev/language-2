@@ -305,6 +305,58 @@ impl Server {
         json!({"signatures": sigs, "activeSignature": h.active_sig, "activeParameter": h.active_param})
     }
 
+    /// Text of a file: the editor's copy when it is open.
+    fn file_text(&self, p: &Path) -> String {
+        self.ws.overlays.get(p).cloned().or_else(|| std::fs::read_to_string(p).ok()).unwrap_or_default()
+    }
+
+    fn position(&self, params: &Value) -> Option<(PathBuf, String, u32, u32)> {
+        let (_, d) = self.doc(params)?;
+        let (line, col) = from_lsp(&d.text, &params["position"]);
+        Some((d.path.clone(), d.text.clone(), line, col))
+    }
+
+    fn references(&mut self, params: &Value) -> Value {
+        let Some((path, text, line, col)) = self.position(params) else { return Value::Null };
+        let include = params["context"]["includeDeclaration"].as_bool().unwrap_or(true);
+        let occ = ide::references(&path, &text, &self.ws, line, col, include);
+        let mut texts: HashMap<PathBuf, String> = HashMap::new();
+        let locs: Vec<Value> = occ
+            .into_iter()
+            .map(|(p, l, c, n)| {
+                let t = texts.entry(p.clone()).or_insert_with(|| self.file_text(&p));
+                json!({"uri": path_to_uri(&p), "range": range(t, l, c, n)})
+            })
+            .collect();
+        Value::Array(locs)
+    }
+
+    fn highlights(&mut self, params: &Value) -> Value {
+        let Some((path, text, line, col)) = self.position(params) else { return Value::Null };
+        let hs = ide::highlights(&path, &text, &self.ws, line, col);
+        // kind 3 = write (the declaration), 2 = read
+        Value::Array(hs.into_iter().map(|(l, c, n, decl)| json!({"range": range(&text, l, c, n), "kind": if decl { 3 } else { 2 }})).collect())
+    }
+
+    fn prepare_rename(&mut self, params: &Value) -> Result<Value, String> {
+        let Some((path, text, line, col)) = self.position(params) else { return Ok(Value::Null) };
+        let (name, l, c, n) = ide::prepare_rename(&path, &text, &self.ws, line, col)?;
+        Ok(json!({"range": range(&text, l, c, n), "placeholder": name}))
+    }
+
+    fn rename(&mut self, params: &Value) -> Result<Value, String> {
+        let Some((path, text, line, col)) = self.position(params) else { return Ok(Value::Null) };
+        let new_name = params["newName"].as_str().unwrap_or("").trim().to_string();
+        let edits = ide::rename(&path, &text, &self.ws, line, col, &new_name)?;
+        let mut changes = serde_json::Map::new();
+        for (p, spots) in edits {
+            let t = if p == path { text.clone() } else { self.file_text(&p) };
+            let list: Vec<Value> = spots.into_iter().map(|(l, c, n)| json!({"range": range(&t, l, c, n), "newText": new_name})).collect();
+            changes.insert(path_to_uri(&p), Value::Array(list));
+        }
+        Ok(json!({"changes": changes}))
+    }
+
     fn document_symbols(&mut self, params: &Value) -> Value {
         let Some((_, d)) = self.doc(params) else { return Value::Null };
         let text = d.text.clone();
@@ -401,6 +453,9 @@ impl Server {
                         "textDocumentSync": {"openClose": true, "change": 1},
                         "hoverProvider": true,
                         "definitionProvider": true,
+                        "referencesProvider": true,
+                        "documentHighlightProvider": true,
+                        "renameProvider": {"prepareProvider": true},
                         "documentSymbolProvider": true,
                         "completionProvider": {"triggerCharacters": ["."], "resolveProvider": false},
                         "signatureHelpProvider": {"triggerCharacters": ["(", ","], "retriggerCharacters": [","]},
@@ -448,6 +503,19 @@ impl Server {
                     "textDocument/completion" => self.completion(&params),
                     "textDocument/signatureHelp" => self.signature_help(&params),
                     "textDocument/documentSymbol" => self.document_symbols(&params),
+                    "textDocument/references" => self.references(&params),
+                    "textDocument/documentHighlight" => self.highlights(&params),
+                    "textDocument/prepareRename" | "textDocument/rename" => {
+                        let r = if method == "textDocument/rename" { self.rename(&params) } else { self.prepare_rename(&params) };
+                        match r {
+                            Ok(v) => v,
+                            Err(msg) => {
+                                // RequestFailed: the editor shows the message
+                                self.reply_error(id, -32803, &msg);
+                                return;
+                            }
+                        }
+                    }
                     _ => {
                         self.reply_error(id, -32601, &format!("method '{}' is not supported", method));
                         return;

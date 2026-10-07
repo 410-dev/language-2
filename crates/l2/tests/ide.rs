@@ -399,3 +399,117 @@ fn type_positions() {
     assert!(items.iter().any(|i| i == "Point"), "{:?}", items);
 }
 
+
+/// A small project: an entry file and a package module.
+fn project(name: &str) -> (PathBuf, Workspace) {
+    let root = dir().join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("geo")).unwrap();
+    std::fs::write(
+        root.join("app.l2"),
+        "@using sdk 1\nusing stdio as stdio\nusing geo.Shapes as Shapes\n\nfunction void main() {\n    Circle c = new Circle(2.0)\n    Float64 total = c.area() + c.area()\n    Int64 n = Shapes.count()\n    stdio.println(f\"{total} {n} {c.radius}\")\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("geo").join("Shapes.l2"),
+        "@using sdk 1\n\n// a circle\npublic class Circle {\n    public Float64 radius = 0.0\n    public Circle(Float64 r) {\n        this.radius = r\n    }\n    public function Float64 area() {\n        return radius * radius * 3.0\n    }\n}\n\npublic class Shapes {\n    public static function Int64 count() {\n        Circle one = new Circle(1.0)\n        Float64 a = one.area()\n        return 1\n    }\n}\n",
+    )
+    .unwrap();
+    // `using geo.Shapes` brings the package's types (Circle) along
+    let ws = Workspace { roots: vec![root.clone()], ..Default::default() };
+    (root, ws)
+}
+
+fn read(p: &Path) -> String {
+    std::fs::read_to_string(p).unwrap()
+}
+
+#[test]
+fn references_across_files() {
+    let (root, ws) = project("refs");
+    let app = root.join("app.l2");
+    let shapes = root.join("geo").join("Shapes.l2");
+    let src = read(&app);
+    assert!(ide::analyze(&app, &src, &ws, Want::Refs, None).diags.is_empty());
+    // a method used in two files, from a use
+    let (l, c) = pos(&src, "area()", 0, 1);
+    let refs = ide::references(&app, &src, &ws, l, c, true);
+    let in_app = refs.iter().filter(|r| r.0 == app).count();
+    let in_shapes = refs.iter().filter(|r| r.0 == shapes).count();
+    assert_eq!((in_app, in_shapes), (2, 2), "{:?}", refs); // two calls here; declaration and a call there
+    let without = ide::references(&app, &src, &ws, l, c, false);
+    assert_eq!(without.len(), 3);
+    // a class: its declaration, constructor, `new` expressions and type uses
+    let (l, c) = pos(&src, "Circle c", 0, 1);
+    let refs = ide::references(&app, &src, &ws, l, c, true);
+    assert_eq!(refs.iter().filter(|r| r.0 == app).count(), 2, "{:?}", refs);
+    assert_eq!(refs.iter().filter(|r| r.0 == shapes).count(), 4, "{:?}", refs);
+    // a field
+    let (l, c) = pos(&src, "c.radius", 0, 3);
+    let refs = ide::references(&app, &src, &ws, l, c, true);
+    assert_eq!(refs.len(), 5, "{:?}", refs); // declaration, `this.radius`, `radius * radius`, here
+    // a local: this file only
+    let (l, c) = pos(&src, "c.area", 0, 0);
+    let refs = ide::references(&app, &src, &ws, l, c, true);
+    assert_eq!(refs.len(), 4, "{:?}", refs);
+    let hs = ide::highlights(&app, &src, &ws, l, c);
+    assert_eq!(hs.len(), 4);
+    assert_eq!(hs.iter().filter(|h| h.3).count(), 1);
+}
+
+#[test]
+fn rename_symbols() {
+    let (root, ws) = project("rename");
+    let app = root.join("app.l2");
+    let shapes = root.join("geo").join("Shapes.l2");
+    let src = read(&app);
+    let apply = |edits: &ide::FileEdits, new: &str| -> Vec<(PathBuf, String)> {
+        edits
+            .iter()
+            .map(|(p, spots)| {
+                let mut lines: Vec<Vec<char>> = read(p).split('\n').map(|l| l.chars().collect()).collect();
+                let mut spots = spots.clone();
+                spots.sort_by(|a, b| b.cmp(a));
+                for (l, c, n) in spots {
+                    let line = &mut lines[l as usize - 1];
+                    line.splice(c as usize - 1..(c + n) as usize - 1, new.chars());
+                }
+                (p.clone(), lines.iter().map(|l| l.iter().collect::<String>()).collect::<Vec<_>>().join("\n"))
+            })
+            .collect()
+    };
+    // a class across two files
+    let (l, c) = pos(&src, "Circle c", 0, 1);
+    assert_eq!(ide::prepare_rename(&app, &src, &ws, l, c).unwrap().0, "Circle");
+    let edits = ide::rename(&app, &src, &ws, l, c, "Ring").unwrap();
+    let changed = apply(&edits, "Ring");
+    for (p, t) in &changed {
+        std::fs::write(p, t).unwrap();
+    }
+    let new_app = read(&app);
+    assert!(new_app.contains("Ring c = new Ring(2.0)"), "{}", new_app);
+    let new_shapes = read(&shapes);
+    assert!(new_shapes.contains("public class Ring {") && new_shapes.contains("    public Ring(Float64 r) {") && new_shapes.contains("Ring one = new Ring(1.0)"), "{}", new_shapes);
+    let a = ide::analyze(&app, &new_app, &ws, Want::Refs, None);
+    assert!(a.diags.is_empty(), "{:?}", a.diags);
+    // a method
+    let (l, c) = pos(&new_app, "area()", 0, 0);
+    let edits = ide::rename(&app, &new_app, &ws, l, c, "surface").unwrap();
+    for (p, t) in apply(&edits, "surface") {
+        std::fs::write(p, t).unwrap();
+    }
+    assert!(read(&shapes).contains("function Float64 surface()") && read(&shapes).contains("one.surface()"));
+    let new_app = read(&app);
+    assert!(new_app.contains("c.surface() + c.surface()"));
+    assert!(ide::analyze(&app, &new_app, &ws, Want::Refs, None).diags.is_empty());
+    // invalid names and symbols that cannot be renamed
+    let (l, c) = pos(&new_app, "total =", 0, 0);
+    assert!(ide::rename(&app, &new_app, &ws, l, c, "for").is_err());
+    assert!(ide::rename(&app, &new_app, &ws, l, c, "2x").is_err());
+    assert!(ide::rename(&app, &new_app, &ws, l, c, "sum").is_ok());
+    let (l, c) = pos(&new_app, "println", 0, 0);
+    assert!(ide::prepare_rename(&app, &new_app, &ws, l, c).is_err());
+    // `Shapes` is the class of module geo.Shapes: renaming it would break `using geo.Shapes`
+    let (l, c) = pos(&new_app, "Shapes.count", 0, 0);
+    assert!(ide::prepare_rename(&app, &new_app, &ws, l, c).is_err());
+}
